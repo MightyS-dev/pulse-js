@@ -2,6 +2,16 @@
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.1] - 2026-11-15
+
+### Changed
+
+- Without a `debug` option, signals from development builds are now marked as test data: in Node when `NODE_ENV` is `development` or `test`, in the browser when your bundler sets `process.env.NODE_ENV` to one of those. Everything else counts as real data. An explicit `debug` value always wins.
+
+### Added
+
+- README: a Test mode section that explains how signals are marked as test or real.
+
 ## [0.9.0] - 2026-11-15
 
 Initial public release.

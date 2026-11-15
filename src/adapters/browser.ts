@@ -106,6 +106,12 @@ export function browserPlatform(): Platform {
     },
     storage: browserStorage,
     transport: (appKey, host) => fetchTransport(appKey, host, () => fetch),
+    development() {
+      // Bundlers replace the exact expression process.env.NODE_ENV at build time. Without a replacement and without
+      // a process global, the read throws and the default is real data. A production bundle drops the check.
+      // The expression is written out twice so that a minifier can fold each comparison after the replacement.
+      try { return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test'; } catch { return false; }
+    },
     onHidden(callback) {
       if (typeof document === 'undefined') return;
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') callback(); });

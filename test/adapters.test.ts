@@ -10,6 +10,8 @@ import { browserInfo, browserPlatform, LEASE } from '../src/adapters/browser.js'
 import { fileStorage, instanceStorage, nodePlatform } from '../src/adapters/node.js';
 import { fetchTransport } from '../src/adapters/shared.js';
 import { createPulse } from '../src/core.js';
+import { build } from 'esbuild';
+import { runInNewContext } from 'node:vm';
 import type { Signal } from '../src/types.js';
 import { settle } from './helpers.js';
 
@@ -365,5 +367,53 @@ describe('Node adapter and published entry points', () => {
       expect(execFileSync(process.execPath, [...conditions, '--input-type=module', '-e', script], { encoding: 'utf8' }).trim()).toBe('ok');
     }
     expect(execFileSync(process.execPath, ['-e', 'const {Pulse}=require("@mightys-dev/pulse"); console.log(typeof Pulse.track)'], { encoding: 'utf8' }).trim()).toBe('function');
+  });
+});
+
+describe('node test mode default', () => {
+  it.each([['development', true], ['test', true], ['production', false], ['staging', false], ['', false], ['Development', false], [undefined, false]])(
+    'NODE_ENV=%s means development=%s', (value, expected) => {
+      if (value === undefined) vi.stubEnv('NODE_ENV', undefined as never); else vi.stubEnv('NODE_ENV', value);
+      expect(nodePlatform().development()).toBe(expected);
+    });
+
+  it('reads NODE_ENV when called, not when the platform is created', () => {
+    vi.stubEnv('NODE_ENV', 'production'); const platform = nodePlatform();
+    vi.stubEnv('NODE_ENV', 'development'); expect(platform.development()).toBe(true);
+  });
+});
+
+describe('browser test mode default in bundles', () => {
+  // Neutral platform: esbuild's browser platform would itself replace NODE_ENV in unminified builds.
+  // A tiny app is bundled with the build-time replacement the app's bundler would apply, then run with no process global.
+  async function defaultIn(define: string | undefined): Promise<boolean> {
+    const result = await build({
+      stdin: { contents: "import { browserPlatform } from './src/adapters/browser.ts'; globalThis.answer = browserPlatform().development();",
+        resolveDir: resolve(import.meta.dirname, '..'), loader: 'ts' },
+      bundle: true, write: false, format: 'iife', platform: 'neutral', target: 'es2022', logLevel: 'silent',
+      ...(define === undefined ? {} : { define: { 'process.env.NODE_ENV': JSON.stringify(define) } }),
+    });
+    const context: Record<string, unknown> = {};
+    runInNewContext(result.outputFiles[0]!.text, context);
+    expect('process' in context).toBe(false);
+    return context.answer as boolean;
+  }
+
+  it('is test data in a development bundle, real in a production bundle and real when nothing is replaced', async () => {
+    expect(await defaultIn('development')).toBe(true);
+    expect(await defaultIn('test')).toBe(true);
+    expect(await defaultIn('production')).toBe(false);
+    expect(await defaultIn(undefined)).toBe(false);
+  });
+
+  it('does not throw when process exists without an env object', () => {
+    vi.stubGlobal('process', {}); expect(browserPlatform().development()).toBe(false);
+  });
+
+  it('leaves no trace of the check in a production bundle', async () => {
+    const result = await build({ entryPoints: [resolve(import.meta.dirname, '../src/web.ts')], bundle: true, write: false, minify: true,
+      format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent', define: { 'process.env.NODE_ENV': '"production"' } });
+    expect(result.outputFiles[0]!.text).not.toContain('process');
+    expect(result.outputFiles[0]!.text).not.toContain('"development"');
   });
 });

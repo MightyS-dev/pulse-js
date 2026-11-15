@@ -1,6 +1,8 @@
 # MightyS Pulse for JavaScript
 
-Privacy-first analytics for apps and games. No device IDs, offline queue, tiny.
+Privacy-first analytics for web apps, browser games and Node.js. No cookies, no device IDs, offline queue, under 5 kB gzipped.
+
+Docs: https://pulse.mightys.dev/docs/javascript/
 
 MightyS Pulse lets a web app, a browser game or a Node.js service send named signals (events) with an optional number and a few properties, and see them in the Pulse dashboard. It sets no cookies, reads no advertising or device identifier and does no fingerprinting. It has zero runtime dependencies.
 
@@ -64,11 +66,22 @@ Do not put personal data in signal names, properties or app versions: they are s
 | `maxQueueSize` | `1000` | Integer from 1 to 100000. |
 | `maxQueueAgeDays` | `7` | Number up to 30. Values above 29 act as 29. |
 | `gzip` | `true` | Compresses request bodies above 1024 bytes. |
-| `debug` | `false` | Marks signals as test data and enables warnings, which never contain signal or user data. |
+| `debug` | development builds: `true`; otherwise `false` | Marks signals as test data and enables warnings, which never contain signal or user data. See Test mode below. |
 | `appVersion` | `''` | String of at most 512 UTF-16 code units. |
 | `storagePath` | per-process files under `~/.mightys-pulse/` | Node only. A queue file for exactly one process; consent is stored in `<storagePath>.consent`. |
 
 Invalid numeric and boolean values fall back to their defaults.
+
+## Test mode
+
+Every signal carries a `debug` flag. `debug: true` marks it as test data, and the dashboard's test mode switch chooses whether you see test or real signals. One app key serves both, so you need one key per app. An explicit `debug` option always wins. Without it, the choice is made once, at `init`:
+
+- **Node:** `NODE_ENV` set to `development` or `test` means test data. Anything else, including unset, means real data.
+- **Browser:** the SDK follows `process.env.NODE_ENV` when your bundler replaces it at build time. A page without such a replacement counts as real data, so set the option yourself.
+
+```js
+Pulse.init(key, { debug: location.hostname === 'localhost' }); // or, in Vite: { debug: import.meta.env.DEV }
+```
 
 ## Delivery and offline behaviour
 
@@ -88,8 +101,6 @@ Invalid numeric and boolean values fall back to their defaults.
 | Node.js | 22.12 and newer (native `fetch`). |
 | Browsers | ES2022. `fetch` and `TextEncoder` are required for sending. Persistence, gzip and user hashing (WebCrypto, which needs HTTPS) degrade safely when unavailable. |
 | Module formats | ESM and CommonJS, with TypeScript declarations for both. |
-
-The web build is about 10.5 kB minified and 4.9 kB gzipped.
 
 ## Opt-out
 

@@ -85,6 +85,7 @@ export function nodePlatform(): Platform {
       return instanceStorage(join(homedir(), '.mightys-pulse'), createHash('sha256').update(appKey, 'utf8').digest('hex'));
     },
     transport: (appKey, host) => fetchTransport(appKey, host, () => globalThis.fetch),
+    development: () => ['development', 'test'].includes(process.env.NODE_ENV ?? ''),
     onHidden() { /* Node callers await flush before exiting. No process handlers are installed. */ },
   };
 }

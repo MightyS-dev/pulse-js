@@ -12,6 +12,32 @@ const fixtureUrl = new URL('./fixtures/v1.jsonc', import.meta.url);
 beforeEach(() => { vi.useFakeTimers({ now: new Date('2026-11-13T08:00:00Z') }); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+describe('test mode default', () => {
+  it.each([[true, undefined, true], [false, undefined, false], [true, false, false], [false, true, true], [true, true, true], [false, false, false]])(
+    'platform development=%s, debug option=%s marks debug=%s', async (development, debug, expected) => {
+      const h = harness(); h.setDevelopment(development);
+      await h.start(debug === undefined ? { gzip: false } : { gzip: false, debug });
+      h.client.track('mode'); await h.client.flush();
+      expect(h.signals()[0]!.debug).toBe(expected);
+    });
+
+  it('takes the decision once at init, for signals queued before init and for later ones', async () => {
+    const h = harness(); h.setDevelopment(true);
+    h.client.track('early');
+    await h.start({ gzip: false });
+    h.setDevelopment(false);
+    h.client.track('late'); await h.client.flush();
+    expect(h.signals().map(s => [s.type, s.debug])).toEqual([['early', true], ['late', true]]);
+  });
+
+  it('enables warnings only when debug is on, whether explicit or by default', async () => {
+    const quiet = harness(); await quiet.start(); quiet.client.track(''); await quiet.client.flush();
+    expect(quiet.platform.environment.warn).not.toHaveBeenCalled();
+    const loud = harness(); loud.setDevelopment(true); await loud.start(); loud.client.track(''); await loud.client.flush();
+    expect(loud.platform.environment.warn).toHaveBeenCalled();
+  });
+});
+
 describe('v1 signals and privacy', () => {
   it('matches the reference fixture structure with unavailable system fields omitted', async () => {
     const h = harness(); await h.start({ appVersion: '1.2.3', gzip: false });
@@ -23,7 +49,7 @@ describe('v1 signals and privacy', () => {
     const unavailable = ['appBuildNumber', 'deviceModel'];
     expect(Object.keys(actual.system).sort()).toEqual(Object.keys(fixture[0]!.system).filter(k => !unavailable.includes(k)).sort());
     expect(actual).toMatchObject({ timestamp: '2026-11-13T08:00:00.000Z', type: 'purchase', value: 4.5, debug: false,
-      system: { platform: 'web', appVersion: '1.2.3', sdkName: 'pulse-js', sdkVersion: '0.9.0' }, props: { item: 'coins', amount: 2 } });
+      system: { platform: 'web', appVersion: '1.2.3', sdkName: 'pulse-js', sdkVersion: '0.9.1' }, props: { item: 'coins', amount: 2 } });
   });
 
   it('escapes JSON, keeps Unicode and finite numbers, converts booleans and rejects unsupported props', async () => {

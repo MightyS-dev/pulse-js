@@ -20,6 +20,7 @@ export function harness(storage: Storage = new MemoryStorage()) {
   const responses: (TransportResponse | Error)[] = [];
   let hidden = (): void => {};
   let id = 0;
+  let development = false;
   const platform: Platform = {
     clock: {
       now: () => Date.now(), random: () => 0.25,
@@ -43,12 +44,14 @@ export function harness(storage: Storage = new MemoryStorage()) {
       },
       cancel: vi.fn(),
     }),
+    development: () => development,
     onHidden: callback => { hidden = callback; },
   };
   const client = createPulse(platform);
   return {
     client, platform, requests, responses, storage,
     hide: () => hidden(),
+    setDevelopment(value: boolean) { development = value; },
     async start(options: PulseOptions = {}) { client.init('synthetic-app-key', options); await settle(); },
     signals(index = 0): Signal[] {
       const request = requests[index]!;

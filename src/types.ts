@@ -5,6 +5,11 @@ export interface PulseOptions {
   maxQueueSize?: number;
   maxQueueAgeDays?: number;
   gzip?: boolean;
+  /**
+   * Marks signals as test data and enables warnings. An explicit value always wins. When omitted, signals are marked
+   * as test data only in a development build: in Node when `NODE_ENV` is `development` or `test` at `init`, in the
+   * browser when the bundler replaced `process.env.NODE_ENV` with one of those values. Otherwise they count as real data.
+   */
   debug?: boolean;
   appVersion?: string;
   /**
@@ -89,5 +94,7 @@ export interface Platform {
   environment: Environment;
   storage(appKey: string, options: PulseOptions): Storage;
   transport(appKey: string, host: string): Transport;
+  /** True only with positive evidence of a development build. Read once, at init. */
+  development(): boolean;
   onHidden(callback: () => void): void;
 }

@@ -291,7 +291,7 @@ export function createPulse(platform: Platform): PulseClient {
         // The server rejects signals older than 30 days; one day of margin covers clock skew.
         maxQueueAgeDays: Math.min(29, numeric('maxQueueAgeDays', 1 / 86400, 30)),
         gzip: input.gzip !== false,
-        debug: input.debug === true,
+        debug: typeof input.debug === 'boolean' ? input.debug : platform.development(),
         appVersion: typeof input.appVersion === 'string' ? wellFormed(input.appVersion.slice(0, 512)) : '',
       };
       const store = storage = platform.storage(appKey, input);
