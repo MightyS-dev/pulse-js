@@ -1,0 +1,44 @@
+import type { Signal, TrackOptions } from './types.js';
+
+export const encode = (value: string): Uint8Array => new TextEncoder().encode(value);
+export const size = (value: string): number => encode(value).byteLength;
+export const DAY = 86400000;
+/** Replaces lone surrogates with U+FFFD, as String.prototype.toWellFormed does, without requiring ES2024. */
+export const wellFormed = (value: string): string =>
+  value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, m => m[1] ? m : '�');
+
+export function normalize(type: string, options: TrackOptions = {}, warn?: () => void): Pick<Signal, 'type' | 'props' | 'value'> | undefined {
+  if (typeof type !== 'string') return;
+  // Well-formed text first, so the UTF-16 and UTF-8 limits measure exactly what is sent.
+  type = wellFormed(type);
+  if (!type.trim() || type.length > 200 || !options || typeof options !== 'object') return;
+  const value = options.value;
+  if (value !== undefined && value !== null && !Number.isFinite(value)) return;
+  const props: Signal['props'] = Object.create(null) as Signal['props'];
+  const input = options.props;
+  if (input !== undefined && (!input || typeof input !== 'object' || Array.isArray(input))) return;
+  for (const [raw, item] of Object.entries(input ?? {})) {
+    const key = wellFormed(raw);
+    if (typeof item === 'string') props[key] = wellFormed(item);
+    else if (Number.isFinite(item)) props[key] = item as number;
+    else if (typeof item === 'boolean') props[key] = String(item);
+    else warn?.();
+  }
+  if (size(JSON.stringify(props)) > 8192) return;
+  return { type, props, ...(value === undefined ? {} : { value }) };
+}
+
+export function validStored(input: unknown, now: number, age: number): input is Signal {
+  try {
+    const s = input as Signal;
+    const { timestamp, sessionId, userHash, system } = s;
+    const time = Date.parse(timestamp);
+    const text = (v: unknown): v is string => typeof v === 'string' && v.length <= 512;
+    // Rebuild the record exactly as this SDK writes it; any extra, missing, reordered or retyped field differs.
+    return text(sessionId) && !!sessionId && timestamp.endsWith('Z') && time >= now - age * DAY && time <= now + 3600000 &&
+      (userHash === undefined || /^[a-f0-9]{64}$/.test(userHash)) && Object.values(system).every(text) &&
+      Object.keys(system).join() === 'platform,osName,osVersion,locale,appVersion,sdkName,sdkVersion' &&
+      JSON.stringify(s) === JSON.stringify({ ...normalize(s.type, s), timestamp, sessionId, ...(userHash === undefined ? {} : { userHash: '' + userHash }),
+        debug: s.debug === true, system });
+  } catch { return false; }
+}

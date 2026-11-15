@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signal SDK example</title>
+<h1>Signal SDK example</h1>
+<p>Build the SDK and serve this directory over HTTP(S). Enter a public application key.</p>
+<label>Application key <input id="key" autocomplete="off"></label>
+<button id="start">Initialize</button>
+<button id="signal" disabled>Send signal</button>
+<button id="many" disabled>Send 100</button>
+<button id="flush" disabled>Flush</button>
+<pre id="status" aria-live="polite">Ready</pre>
+<script type="module">
+  import { Pulse } from '../../dist/web.js';
+  const status = document.querySelector('#status');
+  document.querySelector('#start').addEventListener('click', () => {
+    const key = document.querySelector('#key').value.trim();
+    if (!key) { status.textContent = 'Enter an application key.'; return; }
+    Pulse.init(key, { appVersion: 'example-1' });
+    for (const id of ['signal', 'many', 'flush']) document.getElementById(id).disabled = false;
+    document.querySelector('#start').disabled = true;
+    status.textContent = 'Initialized';
+  });
+  document.querySelector('#signal').addEventListener('click', () => { Pulse.track('example.click'); status.textContent = 'Signal queued'; });
+  document.querySelector('#many').addEventListener('click', () => {
+    for (let index = 0; index < 100; index++) Pulse.track('example.batch', { props: { index } });
+    status.textContent = '100 signals queued';
+  });
+  document.querySelector('#flush').addEventListener('click', async () => { await Pulse.flush(); status.textContent = 'Eligible send attempts finished'; });
+</script>
+</html>

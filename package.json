@@ -1,0 +1,113 @@
+{
+  "name": "@mightys-dev/pulse",
+  "version": "0.9.0",
+  "description": "Privacy-first analytics for apps and games. No device IDs, offline queue, tiny.",
+  "keywords": [
+    "analytics",
+    "privacy",
+    "privacy-first",
+    "telemetry",
+    "events",
+    "event-tracking",
+    "product-analytics",
+    "game-analytics",
+    "offline-queue",
+    "no-cookies",
+    "browser",
+    "nodejs",
+    "typescript",
+    "esm"
+  ],
+  "homepage": "https://pulse.mightys.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MightyS-dev/pulse-js.git"
+  },
+  "bugs": {
+    "email": "contact@mightys.dev"
+  },
+  "author": "MightyS Team",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "./dist/node.cjs",
+  "module": "./dist/web.js",
+  "types": "./dist/web.d.ts",
+  "exports": {
+    ".": {
+      "browser": {
+        "import": {
+          "types": "./dist/web.d.ts",
+          "default": "./dist/web.js"
+        },
+        "require": {
+          "types": "./dist/web.d.cts",
+          "default": "./dist/web.cjs"
+        }
+      },
+      "node": {
+        "import": {
+          "types": "./dist/node.d.ts",
+          "default": "./dist/node.js"
+        },
+        "require": {
+          "types": "./dist/node.d.cts",
+          "default": "./dist/node.cjs"
+        }
+      },
+      "import": {
+        "types": "./dist/web.d.ts",
+        "default": "./dist/web.js"
+      },
+      "require": {
+        "types": "./dist/web.d.cts",
+        "default": "./dist/web.cjs"
+      }
+    },
+    "./web": {
+      "import": {
+        "types": "./dist/web.d.ts",
+        "default": "./dist/web.js"
+      },
+      "require": {
+        "types": "./dist/web.d.cts",
+        "default": "./dist/web.cjs"
+      }
+    },
+    "./node": {
+      "import": {
+        "types": "./dist/node.d.ts",
+        "default": "./dist/node.js"
+      },
+      "require": {
+        "types": "./dist/node.d.cts",
+        "default": "./dist/node.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist",
+    "examples/node.mjs",
+    "examples/web",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node node_modules/typescript/bin/tsc -p tsconfig.test.json && vitest run",
+    "size": "node scripts/size.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  }
+}
