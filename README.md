@@ -1,6 +1,6 @@
 # MightyS Pulse for JavaScript
 
-Privacy-first analytics for web apps, browser games and Node.js. No cookies, no device IDs, offline queue, under 5.5 kB gzipped.
+Privacy-first analytics for web apps, browser games and Node.js. No cookies, no device IDs, offline queue, under 8 kB gzipped.
 
 Docs: https://pulse.mightys.dev/docs/javascript/
 
@@ -45,7 +45,17 @@ Public calls do not throw and their promises do not reject. Signals tracked befo
 
 ## What is sent and what is never sent
 
-Sent with every signal: your signal name, optional number and properties, a UTC timestamp, the debug flag, a random session id, the platform (`web`, `node` or `mobile`), coarse OS name and version when available, locale, your configured app version, and the SDK name and version. Inside a native app wrapper (see below) the device model is sent too: the Android model name, or `iPhone` or `iPad`.
+Sent with every signal: your signal name, optional number and properties, a UTC timestamp, the debug flag, a random session id, the platform (`web`, `node` or `mobile`), coarse OS name and version when available, locale, your configured app version, and the SDK name and version. What else is sent depends on where the code runs. A field the platform cannot give is left out.
+
+| Where | Extra fields |
+| --- | --- |
+| **Node.js** | Device: `deviceType` (`desktop`), `architecture`, `runtimeVersion`. Settings: `timeZone`, `utcOffsetMinutes`, `language`, `preferredLanguage`, `region`. App: `isDebugBuild`, plus `appName` and `appBuildNumber` if you pass them. Usage statistics (below). |
+| **Native app wrapper** | Device: `deviceType`, `deviceModel`, `targetEnvironment` (`capacitor`, `cordova` or `webview`). Screen: `screenWidth`, `screenHeight`, `screenScale`, `screenWidthPx`, `screenHeightPx`, `orientation`. Settings and accessibility: `colorScheme`, `reduceMotion`, `increaseContrast`, `invertColors`, `layoutDirection`, `timeZone`, `utcOffsetMinutes`, `language`, `preferredLanguage`, `region`. Network: `connectionType`. App: `isDebugBuild`, plus `appName` and `appBuildNumber` if you pass them. Usage statistics (below). |
+| **Normal browser** | Only: `language`, `preferredLanguage`, `timeZone`, `utcOffsetMinutes`, `colorScheme`, `reduceMotion`, `increaseContrast`, `deviceType`. No screen size, connection type or other values that help to recognise a device. Nothing is stored. |
+
+Usage statistics (Node.js and native app wrappers): `firstSessionDate`, `totalSessionsCount`, `distinctDaysUsed`, `distinctDaysUsedLastMonth`, `previousSessionSeconds`, `averageSessionSeconds`, `sessionSeconds`, and `isNewInstall` during the first session. They are kept in one small file next to the install id (`<storagePath>.usage`, or `usage-<first 16 hex of the app key hash>` under `~/.mightys-pulse/`) or, in a wrapper, in `localStorage` under `mightys-pulse:usage:<app key>`. Opt-out deletes them. If storage fails they are kept in memory for the process.
+
+Automatic signals (Node.js and native app wrappers): `pulse.session_started` once per session, `pulse.new_install` on the first launch and `pulse.app_updated` (with `previousVersion` and `previousBuild`) when the app version or build changed since the last launch. At most one of each per session, usually far fewer. A normal browser sends none of them because it has nowhere to keep the statistics.
 
 Sessions use a random id that changes after 30 minutes of inactivity.
 
@@ -57,7 +67,7 @@ Anonymous install id: random, created by the SDK on first launch, stored only in
 
 User id: optional. If you call `setUser`, the id is hashed with SHA-256 on the device and sent instead of the install id. The raw id is never stored or sent. The hash is pseudonymous and can link one user's signals. `setUser(null)` goes back to the install id (or to no user hash in a normal browser).
 
-Never sent: cookies, advertising or device identifiers, device names or hardware details, fingerprinting data (canvas, fonts, screen, high-entropy Client Hints), location, page URLs, referrers, page titles. Browsers add their ordinary User-Agent header to any request; the SDK adds nothing to it.
+Never sent: cookies, advertising or device identifiers, device names, fingerprinting data (canvas, fonts, high-entropy Client Hints, and in a normal browser screen size and connection type), location, page URLs, referrers, page titles. Browsers add their ordinary User-Agent header to any request; the SDK adds nothing to it.
 
 IP address: the SDK does not read or send the device's IP address as data. As with any HTTP request, the server sees the connection address, uses it only to derive a two-letter country code and does not store it.
 
@@ -75,7 +85,9 @@ Do not put personal data in signal names, properties or app versions: they are s
 | `gzip` | `true` | Compresses request bodies above 1024 bytes. |
 | `debug` | development builds: `true`; otherwise `false` | Marks signals as test data and enables warnings, which never contain signal or user data. See Test mode below. |
 | `appVersion` | `''` | String of at most 512 UTF-16 code units. |
-| `storagePath` | per-process files under `~/.mightys-pulse/` | Node only. A queue file for exactly one process; consent is stored in `<storagePath>.consent` and the install id in `<storagePath>.install-id`. |
+| `appBuildNumber` | `''` | Node and native app wrappers. String of at most 64 characters. |
+| `appName` | `''` | Node and native app wrappers. String of at most 64 characters. |
+| `storagePath` | per-process files under `~/.mightys-pulse/` | Node only. A queue file for exactly one process; consent is stored in `<storagePath>.consent`, the install id in `<storagePath>.install-id` and the usage statistics in `<storagePath>.usage`. |
 
 Invalid numeric and boolean values fall back to their defaults.
 
@@ -131,4 +143,4 @@ MIT.
 
 Signal rules: the name needs non-whitespace content and at most 200 UTF-16 code units. The value must be a finite number or null. Props accept strings, finite numbers and booleans (sent as `"true"` or `"false"`); other props are discarded. A signal whose props exceed 8192 UTF-8 bytes is discarded. Lone UTF-16 surrogates become U+FFFD.
 
-Browser storage: the key `mightys-pulse:<app key>` holds only the consent choice (plus `mightys-pulse:install:<app key>` with the install id, only inside a native app wrapper), and each page keeps its queue under its own key, removed while empty. Node: with the default location, every process writes its own queue file under `~/.mightys-pulse/` and the processes share one consent file and one install id file; consent changes reach other running processes at their next start.
+Browser storage: the key `mightys-pulse:<app key>` holds only the consent choice (plus `mightys-pulse:install:<app key>` with the install id, only inside a native app wrapper), and each page keeps its queue under its own key, removed while empty. Node: with the default location, every process writes its own queue file under `~/.mightys-pulse/` and the processes share one consent file, one install id file and one usage statistics file; consent changes reach other running processes at their next start.

@@ -2,6 +2,8 @@ import { defaults, identity } from './config.js';
 import { batchFrom, restoreBatches, saveState } from './batch.js';
 import type { Batch } from './batch.js';
 import { ServerPolicy } from './server-policy.js';
+import { beginSession, parseUsage, usageFields } from './usage.js';
+import type { Usage } from './usage.js';
 import { DAY, normalize, size, validStored, wellFormed } from './validation.js';
 import type { Platform, PulseClient, PulseOptions, Signal, Storage, SystemInfo, TrackOptions, Transport } from './types.js';
 
@@ -62,6 +64,14 @@ export function createPulse(platform: Platform): PulseClient {
   let installGeneration = 0;
   let installing = 0;
   let installOps = Promise.resolve();
+  let fresh = false;
+  let usage: Usage | undefined;
+  let usageLoaded = false;
+  let usageOps = Promise.resolve();
+  let usageSaved = 0;
+  let usageText = '';
+  let sessionStart = 0;
+  let starts: [number, string][] = [];
 
   const warn = (message: string): void => {
     try { if (options.debug) env.warn(message); } catch { /* Logging cannot affect the application. */ }
@@ -130,11 +140,20 @@ export function createPulse(platform: Platform): PulseClient {
     try { info = env.info(); } catch { warn(MISSING); }
     const clean = (v: string): string => typeof v === 'string' ? v.slice(0, 512) : '';
     const hash = draft.userHash ?? installHash;
+    const extra: Record<string, string> = {};
+    for (const [key, value] of Object.entries(info)) if (typeof value === 'string' && value) extra[key] = value.slice(0, 64);
+    // Statistics, app name and build exist only where something is stored for the app (Node, native app wrappers).
+    const full = storage?.usage ? {
+      ...(usage ? usageFields(usage, Date.parse(draft.timestamp), sessionStart) : {}),
+      ...(options.appBuildNumber ? { appBuildNumber: options.appBuildNumber } : {}),
+      ...(options.appName ? { appName: options.appName } : {}),
+    } : {};
     return {
       ...draft,
       ...(hash === undefined ? {} : { userHash: hash }),
       debug: options.debug,
       system: {
+        ...extra, ...full,
         platform: clean(info.platform), osName: clean(info.osName), osVersion: clean(info.osVersion),
         locale: clean(info.locale), appVersion: options.appVersion,
         ...(info.deviceModel ? { deviceModel: clean(info.deviceModel) } : {}),
@@ -149,22 +168,76 @@ export function createPulse(platform: Platform): PulseClient {
       const fields = normalize(type, input, () => warn(DISCARDED));
       if (!fields) { warn(DISCARDED); return; }
       const now = clock.now();
-      if (!session || now - lastActivity >= 1800000) session = env.sessionId();
+      const begins = !session || now - lastActivity >= 1800000;
+      if (begins) session = env.sessionId();
       lastActivity = now;
-      const draft: Draft = {
+      // Session statistics wait for the stored record; sessions begun before it is read start in order afterwards.
+      let first: Draft[] = [];
+      if (begins && usageLoaded) first = startSession(now, session);
+      else if (begins && (!hydrated || installing)) starts.push([now, session]);
+      if (usageLoaded && usage && !begins) {
+        usage = { ...usage, cur: [usage.cur?.[0] ?? now, now] };
+        if (now - usageSaved > 15000) saveUsage();
+      }
+      add(...first, {
         ...fields, timestamp: new Date(now).toISOString(), sessionId: session,
         ...(userHash === undefined ? {} : { userHash }),
-      };
-      if (!hydrated || installing) {
-        pending.push(draft);
-        pending = pending.slice(-(initialized ? options.maxQueueSize : 100));
-      } else {
-        queue.push(materialize(draft));
-        prune();
-        void save();
-        schedule();
-      }
+      });
     });
+  }
+
+  function add(...drafts: Draft[]): void {
+    if (!hydrated || installing) {
+      pending.push(...drafts);
+      pending = pending.slice(-(initialized ? options.maxQueueSize : 100));
+    } else {
+      queue.push(...drafts.map(materialize));
+      prune();
+      void save();
+      schedule();
+    }
+  }
+
+  /** Registers a new session and returns the automatic signals that belong to its start. */
+  function startSession(now: number, id: string): Draft[] {
+    const next = beginSession(usage, now, options.appVersion, options.appBuildNumber);
+    usage = next.usage;
+    sessionStart = now;
+    saveUsage();
+    const make = (type: string, props: Draft['props'] = {}): Draft => ({
+      type, props, timestamp: new Date(now).toISOString(), sessionId: id, ...(userHash === undefined ? {} : { userHash }),
+    });
+    const out = [...fresh ? [make('pulse.new_install')] : [], ...next.changed ? [make('pulse.app_updated', { previousVersion: next.changed[0], previousBuild: next.changed[1] })] : [], make('pulse.session_started')];
+    fresh = false;
+    return out;
+  }
+
+  /** Writes the statistics file one write after another. A failure keeps the in-memory statistics. */
+  function saveUsage(): void {
+    const record = usage;
+    usageSaved = clock.now();
+    if (!record || disabled) return;
+    const text = JSON.stringify(record);
+    if (text === usageText) return;
+    usageText = text;
+    usageOps = usageOps.then(() => storage?.usage?.write(text)).catch(() => warn(STORAGE));
+  }
+
+  async function loadUsage(): Promise<void> {
+    const store = storage?.usage;
+    if (!store) return;
+    usage = undefined;
+    try { usage = parseUsage(await store.read()); } catch { warn(STORAGE); }
+    usageLoaded = true;
+  }
+
+  function removeUsage(): Promise<void> {
+    usage = undefined;
+    usageLoaded = false;
+    usageText = '';
+    starts = [];
+    usageOps = usageOps.then(() => storage?.usage?.remove()).catch(() => warn(STORAGE));
+    return usageOps;
   }
 
   /** Starts a new batch from queued signals that no prepared batch holds yet. */
@@ -265,6 +338,7 @@ export function createPulse(platform: Platform): PulseClient {
 
   function flush(keepalive = false): Promise<void> {
     if (!initialized) return Promise.resolve();
+    saveUsage();
     if (running) {
       // Page hide gets one keepalive attempt even while a normal send is in flight.
       if (keepalive && !lifecycle && !hiding) {
@@ -296,11 +370,12 @@ export function createPulse(platform: Platform): PulseClient {
       if (!store) return;
       const valid = (id: unknown): id is string => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id);
       try {
-        let id = await store.read().catch(() => { warn(STORAGE); return null; });
+        let failed = false;
+        let id = await store.read().catch(() => { failed = true; warn(STORAGE); return null; });
         if (!valid(id)) {
           id = env.installId();
-          const kept = await store.write(id).catch(() => { warn(STORAGE); });
-          if (valid(kept)) id = kept;
+          const kept = await store.write(id).catch(() => { failed = true; warn(STORAGE); });
+          if (valid(kept)) id = kept; else fresh ||= !failed;
         }
         const hash = await env.hashUser(id);
         if (generation === installGeneration && !disabled && /^[a-f0-9]{64}$/.test(hash)) installHash = hash;
@@ -333,6 +408,8 @@ export function createPulse(platform: Platform): PulseClient {
         gzip: input.gzip !== false,
         debug: typeof input.debug === 'boolean' ? input.debug : platform.development(),
         appVersion: typeof input.appVersion === 'string' ? wellFormed(input.appVersion.slice(0, 512)) : '',
+        appBuildNumber: typeof input.appBuildNumber === 'string' ? wellFormed(input.appBuildNumber.slice(0, 64)) : '',
+        appName: typeof input.appName === 'string' ? wellFormed(input.appName.slice(0, 64)) : '',
       };
       const store = storage = platform.storage(appKey, input);
       transport = platform.transport(appKey, options.host);
@@ -363,10 +440,13 @@ export function createPulse(platform: Platform): PulseClient {
           } catch { warn(STORAGE); }
         }
         disabled = explicitConsent ?? (store.consent ? optedOut(consent, true) : out);
-        if (disabled) await removeInstall(); else await loadInstall();
+        if (disabled) { await removeInstall(); await removeUsage(); } else { await loadInstall(); await loadUsage(); }
         hydrated = true;
         if (disabled) { pending = []; queue = []; work = []; userHash = undefined; ++userGeneration; }
-        else queue = queue.concat(pending.map(materialize));
+        else {
+          const began = starts.splice(0).flatMap(([at, id]) => usageLoaded ? startSession(at, id) : []);
+          queue = queue.concat([...began, ...pending].map(materialize));
+        }
         pending = [];
         // Writes only a change made here before loading; a change that arrived from another instance is already stored.
         if (disabled !== optedOut(consent, true)) persistConsent();
@@ -399,13 +479,15 @@ export function createPulse(platform: Platform): PulseClient {
       pending = []; queue = []; work = [];
       protect(() => transport?.cancel());
       void removeInstall();
+      void removeUsage();
     } else if (hydrated && storage?.install && installHash === undefined) {
       // A new id is created now; signals tracked meanwhile wait so that they carry its hash.
       installing++;
-      void loadInstall().finally(() => {
+      if (storage.usage) session = '';
+      void loadInstall().then(loadUsage).finally(() => {
         protect(() => {
           if (--installing) return;
-          if (!disabled) queue.push(...pending.map(materialize));
+          if (!disabled) queue.push(...[...starts.splice(0).flatMap(([at, id]) => usageLoaded ? startSession(at, id) : []), ...pending].map(materialize));
           pending = [];
           prune();
           void save();

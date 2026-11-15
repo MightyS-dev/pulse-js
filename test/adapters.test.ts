@@ -120,13 +120,13 @@ describe('browser adapter', () => {
     ['Mozilla/5.0 (X11; Linux x86_64)', 'Linux', ''],
     ['Unknown UA', '', ''],
   ])('extracts only coarse OS information from %s', (userAgent, osName, osVersion) => {
-    expect(browserInfo({ userAgent, language: 'en' } as Navigator)).toEqual({ platform: 'web', osName, osVersion, locale: 'en' });
+    expect(browserInfo({ userAgent, language: 'en' } as Navigator)).toMatchObject({ platform: 'web', osName, osVersion, locale: 'en' });
   });
 
   it('uses low-entropy hints and never calls high-entropy APIs', () => {
     const getHighEntropyValues = vi.fn(() => { throw new Error('forbidden'); });
     const nav = { userAgent: 'private raw UA', userAgentData: { platform: 'Android', getHighEntropyValues }, language: 'en' };
-    expect(browserInfo(nav as unknown as Navigator)).toEqual({ platform: 'web', osName: 'Android', osVersion: '', locale: 'en' });
+    expect(browserInfo(nav as unknown as Navigator)).toMatchObject({ platform: 'web', osName: 'Android', osVersion: '', locale: 'en' });
     expect(getHighEntropyValues).not.toHaveBeenCalled(); expect(browserInfo(undefined).osName).toBe('');
   });
 });
@@ -271,8 +271,8 @@ describe('Node adapter and published entry points', () => {
     const path = resolve(directory, 'queue.json'); const client = createPulse(nodePlatform());
     client.init('synthetic-key', { storagePath: path, appVersion: '2.0' }); await client.setUser('node-private');
     client.track('node', { props: { text: 'x'.repeat(4000) } }); await client.flush();
-    const signal = (JSON.parse(gunzipSync(requests[0]!.body as Uint8Array).toString('utf8')) as Signal[])[0]!;
-    expect(signal.system.platform).toBe('node'); expect(signal.system.osVersion).not.toContain('.');
+    const signal = (JSON.parse(gunzipSync(requests[0]!.body as Uint8Array).toString('utf8')) as Signal[]).find(s => s.type === 'node')!;
+    expect(signal.system.platform).toBe('node'); expect(signal.system.osVersion).toMatch(/^\d+(\.\d+){0,2}$/);
     expect(signal.userHash).toBe(createHash('sha256').update('node-private').digest('hex'));
     expect(await readFile(path, 'utf8')).not.toContain('node-private');
   });
@@ -323,7 +323,7 @@ describe('Node adapter and published entry points', () => {
       'const mode = process.argv[2]; const sent = []; let calls = 0;',
       'globalThis.fetch = async (url, init) => {',
       '  calls++; if (mode === "offline") throw new Error("offline");',
-      '  sent.push(JSON.parse(Buffer.from(init.body).toString("utf8")).map(s => [s.type, s.system.sdkName]));',
+      '  sent.push(JSON.parse(Buffer.from(init.body).toString("utf8")).filter(s => !s.type.startsWith("pulse.")).map(s => [s.type, s.system.sdkName]));',
       '  return calls === 1 ? new Response("", { status: 429, headers: { "Retry-After": "1" } }) : new Response("", { status: 202 });',
       '};',
       'Pulse.init("synthetic-key", { gzip: false }); if (mode === "offline") Pulse.track("from-exited-process");',

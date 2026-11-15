@@ -12,6 +12,10 @@ export interface PulseOptions {
    */
   debug?: boolean;
   appVersion?: string;
+  /** Node and native app wrappers only: the build number of your app. Sent as `appBuildNumber`. */
+  appBuildNumber?: string;
+  /** Node and native app wrappers only: the name of your app. Sent as `appName`. */
+  appName?: string;
   /**
    * Node only. A queue file used by exactly one process, with consent in `<storagePath>.consent`. The default
    * directory needs no option and is safe for several processes.
@@ -39,6 +43,8 @@ export interface SystemInfo {
   locale: string;
   /** Only where the platform gives it without fingerprinting. */
   deviceModel?: string;
+  /** Further string fields (architecture, screen, settings and so on); a field the platform cannot give is left out. */
+  [key: string]: string | undefined;
 }
 
 export interface Signal {
@@ -70,6 +76,8 @@ export interface Storage {
   claim?(): Promise<{ values: string[]; done(): void }>;
   /** Present only where storage belongs to the app (Node, native app wrappers); a normal browser has none. */
   install?: InstallStore;
+  /** Session statistics, kept next to the install id under the same rule. */
+  usage?: { read(): Promise<string | null>; write(value: string): Promise<void>; remove(): Promise<void> };
   /** Consent records written by other instances. */
   watch?(callback: (consent: string | null) => void): void;
 }

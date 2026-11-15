@@ -17,4 +17,6 @@ export const defaults = {
   gzip: true,
   debug: false,
   appVersion: '',
+  appBuildNumber: '',
+  appName: '',
 };

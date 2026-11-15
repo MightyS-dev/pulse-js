@@ -4,7 +4,7 @@ import { homedir, platform, release } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gzip as zip } from 'node:zlib';
 import { fetchTransport, realClock, resilientStorage } from './shared.js';
-import type { InstallStore, Platform, Storage } from '../types.js';
+import type { InstallStore, Platform, Storage, SystemInfo } from '../types.js';
 
 async function readText(path: string): Promise<string | null> {
   try { return await readFile(path, 'utf8'); }
@@ -49,9 +49,11 @@ function installFile(path: string): InstallStore {
 }
 
 /** A queue file plus a consent file. A consent file that exists but cannot be read is treated as opted out. */
-export function fileStorage(path: string, consentPath = `${path}.consent`, installPath = `${path}.install-id`): Storage {
+export function fileStorage(path: string, consentPath = `${path}.consent`, installPath = `${path}.install-id`, usagePath = `${path}.usage`): Storage {
   return resilientStorage({
     install: installFile(installPath),
+    usage: { read: () => readText(usagePath), write: value => writeText(usagePath, value),
+      remove: () => unlink(usagePath).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }) },
     read: () => readText(path),
     write: value => writeText(path, value),
     consent: { read: () => readText(consentPath), write: value => writeText(consentPath, value) },
@@ -72,7 +74,7 @@ export function instanceStorage(directory: string, key: string, pid = process.pi
   const name = (): string => join(directory, `${key}.${pid}.${randomUUID()}.queue`);
   const pattern = /^([0-9a-f]{64})\.(\d+)\.[0-9a-f-]{36}\.queue$/;
   return {
-    ...fileStorage(name(), join(directory, `${key}.json`), join(directory, `install-id-${key.slice(0, 16)}`)),
+    ...fileStorage(name(), join(directory, `${key}.json`), join(directory, `install-id-${key.slice(0, 16)}`), join(directory, `usage-${key.slice(0, 16)}`)),
     async claim() {
       const values: string[] = [];
       const taken: string[] = [];
@@ -93,12 +95,36 @@ export function instanceStorage(directory: string, key: string, pid = process.pi
   };
 }
 
+/** The OS version. Node reports the Darwin kernel on macOS; it maps to the macOS major version, or to nothing when unknown. */
+export function osVersionOf(os: string, kernel: string): string {
+  if (os !== 'darwin') return /^\d+(\.\d+){0,2}/.exec(kernel)?.[0] ?? '';
+  const major = Number(kernel.split('.')[0]);
+  // Darwin 20 to 24 are macOS 11 to 15; from Darwin 25 on the macOS major version is one higher.
+  return major >= 25 ? String(major + 1) : major >= 20 ? String(major - 9) : '';
+}
+
+export function nodeInfo(): SystemInfo {
+  const locale = Intl.DateTimeFormat().resolvedOptions().locale;
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const architecture = ({ x64: 'x86_64', arm64: 'arm64', arm: 'armv7' } as Record<string, string>)[process.arch];
+  let region: string | undefined;
+  try { region = new Intl.Locale(locale).region; } catch { /* No region in this locale. */ }
+  const language = locale.split('-')[0] ?? '';
+  return {
+    platform: 'node', osName: ({ win32: 'Windows', darwin: 'macOS', linux: 'Linux' } as Record<string, string>)[platform()] ?? 'Other',
+    osVersion: osVersionOf(platform(), release()), locale, deviceType: 'desktop', runtimeVersion: `Node ${process.versions.node}`,
+    isDebugBuild: String(['development', 'test'].includes(process.env.NODE_ENV ?? '')),
+    utcOffsetMinutes: String(-new Date().getTimezoneOffset() || 0),
+    ...(architecture ? { architecture } : {}), ...(zone ? { timeZone: zone } : {}),
+    ...(language ? { language, preferredLanguage: language } : {}), ...(region ? { region } : {}),
+  };
+}
+
 export function nodePlatform(): Platform {
   return {
     clock: realClock,
     environment: {
-      info: () => ({ platform: 'node', osName: ({ win32: 'Windows', darwin: 'macOS', linux: 'Linux' } as Record<string, string>)[platform()] ?? 'Other',
-        osVersion: release().split('.')[0] ?? '', locale: Intl.DateTimeFormat().resolvedOptions().locale }),
+      info: nodeInfo,
       sessionId: () => randomUUID(),
       installId: () => randomBytes(16).toString('hex'),
       hashUser: async id => createHash('sha256').update(id, 'utf8').digest('hex'),

@@ -3,6 +3,11 @@ import type { Signal, TrackOptions } from './types.js';
 export const encode = (value: string): Uint8Array => new TextEncoder().encode(value);
 export const size = (value: string): number => encode(value).byteLength;
 export const DAY = 86400000;
+/** Every key a signal's system object may carry. */
+const SYSTEM = ('platform osName osVersion locale appVersion appBuildNumber appName sdkName sdkVersion deviceModel deviceType architecture runtimeVersion '
+  + 'isDebugBuild targetEnvironment screenWidth screenHeight screenScale screenWidthPx screenHeightPx orientation colorScheme layoutDirection '
+  + 'timeZone utcOffsetMinutes language preferredLanguage region reduceMotion increaseContrast invertColors connectionType isNewInstall '
+  + 'firstSessionDate totalSessionsCount distinctDaysUsed distinctDaysUsedLastMonth previousSessionSeconds averageSessionSeconds sessionSeconds').split(' ');
 /** Replaces lone surrogates with U+FFFD, as String.prototype.toWellFormed does, without requiring ES2024. */
 export const wellFormed = (value: string): string =>
   value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, m => m[1] ? m : '�');
@@ -37,7 +42,7 @@ export function validStored(input: unknown, now: number, age: number): input is 
     // Rebuild the record exactly as this SDK writes it; any extra, missing, reordered or retyped field differs.
     return text(sessionId) && !!sessionId && timestamp.endsWith('Z') && time >= now - age * DAY && time <= now + 3600000 &&
       (userHash === undefined || /^[a-f0-9]{64}$/.test(userHash)) && Object.values(system).every(text) &&
-      Object.keys(system).join() === 'platform,osName,osVersion,locale,appVersion,sdkName,sdkVersion' &&
+      SYSTEM.slice(0, 5).concat(SYSTEM.slice(7, 9)).every(k => k in system) && Object.keys(system).every(k => SYSTEM.includes(k)) &&
       JSON.stringify(s) === JSON.stringify({ ...normalize(s.type, s), timestamp, sessionId, ...(userHash === undefined ? {} : { userHash: '' + userHash }),
         debug: s.debug === true, system });
   } catch { return false; }

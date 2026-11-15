@@ -2,6 +2,22 @@
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.3] - 2026-11-15
+
+### Added
+
+- Signals now carry more context, with nothing for you to set up and nothing that identifies a person. Node.js: CPU architecture, Node version, device type, time zone and UTC offset, language and region. Inside a native app wrapper: screen size and scale, orientation, light or dark appearance, reduced motion, increased contrast, inverted colors, layout direction, connection type, device type, time zone and UTC offset, language and region, and whether it runs in Capacitor, Cordova or a plain WebView. A normal browser sends only a small coarse set: language, time zone, UTC offset, light or dark appearance, reduced motion, increased contrast and device type. Nothing new is stored there.
+- Usage statistics in Node.js and native app wrappers: first session date, number of sessions, days used (all time and last 30 days), previous and average session length, and seconds into the current session.
+- Three automatic signals in Node.js and native app wrappers, at most one per session: `pulse.session_started`, `pulse.new_install` (first launch) and `pulse.app_updated` (the app version or build changed). They respect opt-out and the `debug` setting. A normal browser sends none of them.
+- New options `appBuildNumber` and `appName` (Node.js and native app wrappers).
+
+### Changed
+
+- On macOS, Node.js now reports the macOS version instead of the Darwin kernel version. On Windows and Linux the OS version keeps up to three numeric parts.
+- A queue saved by an earlier launch inside a native app wrapper is now kept across restarts (the device model used to make it unreadable).
+- The web build is now under 8 kB gzipped (it was under 5.5 kB).
+- Opt-out also deletes the usage statistics file or entry.
+
 ## [0.9.2] - 2026-11-15
 
 ### Added
