@@ -58,6 +58,10 @@ export function createPulse(platform: Platform): PulseClient {
   let lastActivity = -Infinity;
   let userHash: string | undefined;
   let userGeneration = 0;
+  let installHash: string | undefined;
+  let installGeneration = 0;
+  let installing = 0;
+  let installOps = Promise.resolve();
 
   const warn = (message: string): void => {
     try { if (options.debug) env.warn(message); } catch { /* Logging cannot affect the application. */ }
@@ -125,12 +129,15 @@ export function createPulse(platform: Platform): PulseClient {
     let info = {} as SystemInfo;
     try { info = env.info(); } catch { warn(MISSING); }
     const clean = (v: string): string => typeof v === 'string' ? v.slice(0, 512) : '';
+    const hash = draft.userHash ?? installHash;
     return {
       ...draft,
+      ...(hash === undefined ? {} : { userHash: hash }),
       debug: options.debug,
       system: {
         platform: clean(info.platform), osName: clean(info.osName), osVersion: clean(info.osVersion),
         locale: clean(info.locale), appVersion: options.appVersion,
+        ...(info.deviceModel ? { deviceModel: clean(info.deviceModel) } : {}),
         sdkName: identity.sdkName, sdkVersion: identity.version,
       },
     };
@@ -148,7 +155,7 @@ export function createPulse(platform: Platform): PulseClient {
         ...fields, timestamp: new Date(now).toISOString(), sessionId: session,
         ...(userHash === undefined ? {} : { userHash }),
       };
-      if (!hydrated) {
+      if (!hydrated || installing) {
         pending.push(draft);
         pending = pending.slice(-(initialized ? options.maxQueueSize : 100));
       } else {
@@ -266,12 +273,45 @@ export function createPulse(platform: Platform): PulseClient {
       return running;
     }
     lifecycle = keepalive;
-    running = ready.then(() => drain(keepalive)).catch(() => warn(FAILED)).finally(() => {
+    running = ready.then(() => installOps).then(() => drain(keepalive)).catch(() => warn(FAILED)).finally(() => {
       running = undefined;
       nextSend = policy.pauseUntil > clock.now() ? policy.pauseUntil : clock.now() + interval();
       protect(schedule);
     });
     return running;
+  }
+
+  /** Install id changes run one after another, so a removal is complete before a new id is read. */
+  function serial(action: () => Promise<void>): Promise<void> {
+    const run = installOps.then(action);
+    installOps = run.catch(() => {});
+    return run;
+  }
+
+  /** Reads or creates the install id and keeps its hash. Never throws; an unusable store gives an in-memory id. */
+  function loadInstall(): Promise<void> {
+    const generation = ++installGeneration;
+    return serial(async () => {
+      const store = storage?.install;
+      if (!store) return;
+      const valid = (id: unknown): id is string => typeof id === 'string' && /^[a-f0-9]{32}$/.test(id);
+      try {
+        let id = await store.read().catch(() => { warn(STORAGE); return null; });
+        if (!valid(id)) {
+          id = env.installId();
+          const kept = await store.write(id).catch(() => { warn(STORAGE); });
+          if (valid(kept)) id = kept;
+        }
+        const hash = await env.hashUser(id);
+        if (generation === installGeneration && !disabled && /^[a-f0-9]{64}$/.test(hash)) installHash = hash;
+      } catch { warn(MISSING); }
+    });
+  }
+
+  function removeInstall(): Promise<void> {
+    installHash = undefined;
+    ++installGeneration;
+    return serial(async () => { try { await storage?.install?.remove(); } catch { warn(STORAGE); } });
   }
 
   function init(appKey: string, input: PulseOptions = {}): void {
@@ -323,6 +363,7 @@ export function createPulse(platform: Platform): PulseClient {
           } catch { warn(STORAGE); }
         }
         disabled = explicitConsent ?? (store.consent ? optedOut(consent, true) : out);
+        if (disabled) await removeInstall(); else await loadInstall();
         hydrated = true;
         if (disabled) { pending = []; queue = []; work = []; userHash = undefined; ++userGeneration; }
         else queue = queue.concat(pending.map(materialize));
@@ -357,6 +398,20 @@ export function createPulse(platform: Platform): PulseClient {
       ++userGeneration;
       pending = []; queue = []; work = [];
       protect(() => transport?.cancel());
+      void removeInstall();
+    } else if (hydrated && storage?.install && installHash === undefined) {
+      // A new id is created now; signals tracked meanwhile wait so that they carry its hash.
+      installing++;
+      void loadInstall().finally(() => {
+        protect(() => {
+          if (--installing) return;
+          if (!disabled) queue.push(...pending.map(materialize));
+          pending = [];
+          prune();
+          void save();
+          schedule();
+        });
+      });
     }
     if (persist && hydrated) persistConsent();
     void save();

@@ -1,10 +1,10 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/promises';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { link, mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/promises';
 import { homedir, platform, release } from 'node:os';
 import { dirname, join } from 'node:path';
 import { gzip as zip } from 'node:zlib';
 import { fetchTransport, realClock, resilientStorage } from './shared.js';
-import type { Platform, Storage } from '../types.js';
+import type { InstallStore, Platform, Storage } from '../types.js';
 
 async function readText(path: string): Promise<string | null> {
   try { return await readFile(path, 'utf8'); }
@@ -24,9 +24,34 @@ async function writeText(path: string, value: string): Promise<void> {
   }
 }
 
+const INSTALL_ID = /^[a-f0-9]{32}$/;
+
+/** The install id file. Creation is atomic, so processes of one app that start together end up with one id. */
+function installFile(path: string): InstallStore {
+  return {
+    read: async () => (await readText(path))?.trim() ?? null,
+    async write(id) {
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      try {
+        await writeText(temporary, id);
+        try { await link(temporary, path); return id; }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          const stored = (await readText(path))?.trim();
+          if (stored && INSTALL_ID.test(stored)) return stored;
+          await rename(temporary, path);
+          return id;
+        }
+      } finally { await unlink(temporary).catch(() => {}); }
+    },
+    remove: () => unlink(path).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }),
+  };
+}
+
 /** A queue file plus a consent file. A consent file that exists but cannot be read is treated as opted out. */
-export function fileStorage(path: string, consentPath = `${path}.consent`): Storage {
+export function fileStorage(path: string, consentPath = `${path}.consent`, installPath = `${path}.install-id`): Storage {
   return resilientStorage({
+    install: installFile(installPath),
     read: () => readText(path),
     write: value => writeText(path, value),
     consent: { read: () => readText(consentPath), write: value => writeText(consentPath, value) },
@@ -47,7 +72,7 @@ export function instanceStorage(directory: string, key: string, pid = process.pi
   const name = (): string => join(directory, `${key}.${pid}.${randomUUID()}.queue`);
   const pattern = /^([0-9a-f]{64})\.(\d+)\.[0-9a-f-]{36}\.queue$/;
   return {
-    ...fileStorage(name(), join(directory, `${key}.json`)),
+    ...fileStorage(name(), join(directory, `${key}.json`), join(directory, `install-id-${key.slice(0, 16)}`)),
     async claim() {
       const values: string[] = [];
       const taken: string[] = [];
@@ -75,6 +100,7 @@ export function nodePlatform(): Platform {
       info: () => ({ platform: 'node', osName: ({ win32: 'Windows', darwin: 'macOS', linux: 'Linux' } as Record<string, string>)[platform()] ?? 'Other',
         osVersion: release().split('.')[0] ?? '', locale: Intl.DateTimeFormat().resolvedOptions().locale }),
       sessionId: () => randomUUID(),
+      installId: () => randomBytes(16).toString('hex'),
       hashUser: async id => createHash('sha256').update(id, 'utf8').digest('hex'),
       gzip: body => new Promise<Uint8Array>((resolve, reject) => zip(body, (error, result) => error ? reject(error) : resolve(new Uint8Array(result)))),
       warn: message => console.warn(message),

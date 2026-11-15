@@ -8,20 +8,30 @@ interface CoarseNavigator extends Navigator {
 /** A queue record whose page has not written for two hours, or that unloaded for good, may be adopted. */
 export const LEASE = 7200000;
 
-export function browserInfo(nav: CoarseNavigator | undefined): SystemInfo {
+/**
+ * True inside an iOS or Android app that shows a web page (a wrapped web game or app), from positive evidence only.
+ * There the page's storage belongs to the app. An ordinary browser never matches.
+ */
+export function inWrapper(win: Record<string, any> = globalThis, ua: string = win.navigator?.userAgent ?? ''): boolean {
+  try {
+    return win.Capacitor?.isNativePlatform?.() === true || win.cordova !== undefined || ua.includes('; wv)')
+      || (!!win.webkit?.messageHandlers && !ua.includes('Safari/'));
+  } catch { return false; }
+}
+
+export function browserInfo(nav: CoarseNavigator | undefined, wrapped = inWrapper(globalThis, nav?.userAgent ?? '')): SystemInfo {
   // Do not request high-entropy Client Hints or collect browser versions.
   const ua = nav?.userAgent ?? '';
-  const hints = nav?.userAgentData?.platform;
-  let osName = hints ?? '';
+  let osName = nav?.userAgentData?.platform ?? '';
   let osVersion = '';
   // First match wins: Android user agents also mention Linux. Only major OS versions are read.
-  if (!hints) {
-    for (const [name, test, version] of [['Android', 'Android', /Android (\d+)/], ['iOS', 'iP(hone|ad|od)', /OS (\d+)/],
-      ['Windows'], ['macOS', 'Macintosh'], ['Linux']] as [string, string?, RegExp?][]) {
-      if (RegExp(test ?? name).test(ua)) { osName = name; osVersion = version?.exec(ua)?.[1] ?? ''; break; }
-    }
+  for (const [name, test, version] of [['Android', 'Android', /Android (\d+)/], ['iOS', 'iP(hone|ad|od)', /OS (\d+)/],
+    ['Windows'], ['macOS', 'Macintosh'], ['Linux']] as [string, string?, RegExp?][]) {
+    if (RegExp(test ?? name).test(ua)) { osName ||= name; osVersion = version?.exec(ua)?.[1] ?? ''; break; }
   }
-  return { platform: 'web', osName, osVersion, locale: nav?.language ?? '' };
+  // The device model is read only inside an app wrapper: the Android model token, or iPhone or iPad.
+  const deviceModel = !wrapped ? '' : /;\s*([^;)]+?)\s+Build\//.exec(ua)?.[1] ?? (/iPad/.test(ua) ? 'iPad' : /iP(hone|od)/.test(ua) ? 'iPhone' : '');
+  return { platform: wrapped ? 'mobile' : 'web', osName, osVersion, locale: nav?.language ?? '', ...(deviceModel ? { deviceModel } : {}) };
 }
 
 const hex = (bytes: Uint8Array): string => Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
@@ -51,7 +61,14 @@ export function browserStorage(appKey: string): Storage {
     closed = !(event as PageTransitionEvent).persisted;
     try { if (closed && written) put(last); } catch { /* Storage unavailable. */ }
   });
+  const key = `mightys-pulse:install:${appKey}`;
   return resilientStorage({
+    // Only inside an app wrapper does the page's storage belong to the app; a normal browser stores no identifier.
+    ...(inWrapper() ? { install: {
+      read: async () => local().getItem(key),
+      write: async (id: string) => { local().setItem(key, id); },
+      remove: async () => { local().removeItem(key); },
+    } } : {}),
     // A new page never has a record yet; earlier pages' records are adopted through claim.
     read: async () => null,
     async write(value) {
@@ -94,6 +111,7 @@ export function browserPlatform(): Platform {
     environment: {
       info: () => browserInfo(globalThis.navigator),
       sessionId: random,
+      installId: () => hex(globalThis.crypto.getRandomValues(new Uint8Array(16))),
       async hashUser(id) {
         return hex(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(id))));
       },

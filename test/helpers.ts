@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { gzipSync, gunzipSync } from 'node:zlib';
 import { vi } from 'vitest';
 import { createPulse } from '../src/core.js';
@@ -9,6 +9,18 @@ export class MemoryStorage implements Storage {
   history: string[] = [];
   async read(): Promise<string | null> { return this.value; }
   async write(value: string): Promise<void> { this.history.push(value); this.value = value; }
+}
+
+/** A storage that also keeps the anonymous install id, like the Node and native app wrapper storages. */
+export class InstallStorage extends MemoryStorage {
+  id: string | null = null;
+  failing = false;
+  removed = 0;
+  install = {
+    read: async (): Promise<string | null> => { if (this.failing) throw new Error('unreadable'); return this.id; },
+    write: async (value: string): Promise<void> => { if (this.failing) throw new Error('unwritable'); this.id = value; },
+    remove: async (): Promise<void> => { this.removed++; this.id = null; },
+  };
 }
 
 export async function settle(): Promise<void> {
@@ -30,6 +42,7 @@ export function harness(storage: Storage = new MemoryStorage()) {
     environment: {
       info: () => ({ platform: 'web', osName: 'Windows', osVersion: '', locale: 'sr-RS' }),
       sessionId: () => `session-${++id}`,
+      installId: () => randomBytes(16).toString('hex'),
       hashUser: async raw => createHash('sha256').update(raw).digest('hex'),
       gzip: async body => new Uint8Array(gzipSync(body)),
       warn: vi.fn(),

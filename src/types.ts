@@ -37,6 +37,8 @@ export interface SystemInfo {
   osName: string;
   osVersion: string;
   locale: string;
+  /** Only where the platform gives it without fingerprinting. */
+  deviceModel?: string;
 }
 
 export interface Signal {
@@ -66,8 +68,18 @@ export interface Storage {
   consent?: { read(): Promise<string | null>; write(value: string): Promise<void> };
   /** Queue records left by closed instances. Call done() once they are adopted; they are then removed. */
   claim?(): Promise<{ values: string[]; done(): void }>;
+  /** Present only where storage belongs to the app (Node, native app wrappers); a normal browser has none. */
+  install?: InstallStore;
   /** Consent records written by other instances. */
   watch?(callback: (consent: string | null) => void): void;
+}
+
+/** The anonymous install id: 32 lowercase hex characters, kept only in storage that belongs to the app. */
+export interface InstallStore {
+  read(): Promise<string | null>;
+  /** Returns the id that is stored afterwards, which differs when another process created one first. */
+  write(id: string): Promise<string | void>;
+  remove(): Promise<void>;
 }
 
 export interface TransportResponse {
@@ -84,6 +96,8 @@ export interface Transport {
 export interface Environment {
   info(): SystemInfo;
   sessionId(): string;
+  /** 16 secure random bytes as 32 lowercase hex characters; throws when no secure generator exists. */
+  installId(): string;
   hashUser(id: string): Promise<string>;
   gzip(body: Uint8Array): Promise<Uint8Array | undefined>;
   warn(message: string): void;

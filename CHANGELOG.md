@@ -2,6 +2,19 @@
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.2] - 2026-11-15
+
+### Added
+
+- Users are counted without any setup: the SDK sends a random anonymous install id (hashed) until you call `setUser`. It is kept in a file next to the queue in Node.js and in `localStorage` inside a native app wrapper (Capacitor, Cordova, Android WebView, iOS WKWebView). In a normal browser nothing is stored and no user hash is sent unless you call `setUser`.
+- Inside a native app wrapper the platform is `mobile` and the device model is sent (the Android model name, or `iPhone` or `iPad`).
+
+### Changed
+
+- Opt-out also deletes the install id; turning it off again creates a new one.
+- The Android OS version is now read when the browser reports the platform through Client Hints (it was empty before).
+- The web build is now under 5.5 kB gzipped (it was under 5 kB).
+
 ## [0.9.1] - 2026-11-15
 
 ### Changed
