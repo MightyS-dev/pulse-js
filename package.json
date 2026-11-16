@@ -1,7 +1,7 @@
 {
   "name": "@mightys-dev/pulse",
-  "version": "0.9.3",
-  "description": "Privacy-first analytics for web apps, browser games and Node.js. No cookies, no device IDs, offline queue, under 8 kB gzipped.",
+  "version": "0.9.4",
+  "description": "Privacy-first analytics for web apps, browser games and Node.js. No cookies, no device IDs, offline queue, under 9 kB gzipped.",
   "keywords": [
     "analytics",
     "privacy",

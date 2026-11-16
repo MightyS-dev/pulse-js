@@ -2,6 +2,25 @@
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.4] - 2026-11-16
+
+### Added
+
+- Automatic screen views in browsers and native app wrappers: a `pulse.screen_view` signal with `screen` and `previousScreen` for the first page and every route change (`pushState`, `replaceState`, back and forward, `hashchange`). The name is the route path only, with numeric and uuid-like segments shown as `:id`; no URL, query, fragment or page title is read. Switch it off with `automaticScreenViews: false`, which installs nothing.
+- Settings from the portal: once per launch the SDK asks `GET /api/v1/config` for what the portal has switched off (screen views, automatic signals, field groups) and applies it from the next launch; a normal browser applies it to the rest of the page. Everything is on when the settings cannot be read. See Settings from the portal in the README.
+- New option `automaticSignals` (default `true`): `false` stops `pulse.session_started`, `pulse.new_install` and `pulse.app_updated`. Options in code can only switch things off.
+- `Pulse.screen(name)` sends a screen view by hand, in every environment including Node.js.
+
+### Fixed
+
+- Signals captured in the same millisecond keep their order: timestamps are strictly increasing.
+- Node.js: the first launch with no stored install id now sends `pulse.new_install` (it was skipped, only `pulse.session_started` was sent).
+- Node.js and native app wrappers: while `pulse.app_updated` is switched off (by `automaticSignals: false` or the portal), the stored app version is no longer moved on, so the update is reported once it is allowed again.
+
+### Changed
+
+- The web build is now under 9 kB gzipped (it was under 8 kB).
+
 ## [0.9.3] - 2026-11-15
 
 ### Added

@@ -114,17 +114,15 @@ export function browserStorage(appKey: string): Storage {
   });
   const key = `mightys-pulse:install:${appKey}`;
   const usage = `mightys-pulse:usage:${appKey}`;
+  const config = `mightys-pulse:config:${appKey}`;
+  const item = (name: string) => ({
+    read: async () => local().getItem(name),
+    write: async (value: string) => { local().setItem(name, value); },
+    remove: async () => { local().removeItem(name); },
+  });
   return resilientStorage({
     // Only inside an app wrapper does the page's storage belong to the app; a normal browser stores no identifier.
-    ...(inWrapper() ? { install: {
-      read: async () => local().getItem(key),
-      write: async (id: string) => { local().setItem(key, id); },
-      remove: async () => { local().removeItem(key); },
-    }, usage: {
-      read: async () => local().getItem(usage),
-      write: async (value: string) => { local().setItem(usage, value); },
-      remove: async () => { local().removeItem(usage); },
-    } } : {}),
+    ...(inWrapper() ? { install: item(key), usage: item(usage), config: item(config) } : {}),
     // A new page never has a record yet; earlier pages' records are adopted through claim.
     read: async () => null,
     async write(value) {
@@ -161,6 +159,37 @@ export function browserStorage(appKey: string): Storage {
   });
 }
 
+const watched = new WeakMap<object, Set<(name: string) => void>>();
+const ID = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
+
+/** A route as a screen name: the path only (the hash path for hash routers), numeric and uuid-like segments as `:id`. */
+export function routeName(pathname: string, hash = ''): string {
+  const path = (/^#!?\//.test(hash) ? hash.replace(/^#!?/, '') : pathname).split(/[?#]/)[0] ?? '';
+  return path.split('/').map(part => ID.test(part) ? ':id' : part).join('/').slice(0, 128) || '/';
+}
+
+/** Reports the current route and every later change. The History API is wrapped once, however many clients ask. */
+export function watchScreens(win: Record<string, any>, callback: (name: string) => void): void {
+  const history = win.history as History | undefined;
+  if (!history || !win.location) return;
+  const emit = (): void => watched.get(history)?.forEach(fn => { try { fn(routeName(win.location.pathname, win.location.hash)); } catch { /* Never affects navigation. */ } });
+  const known = watched.get(history);
+  if (known) known.add(callback);
+  else {
+    watched.set(history, new Set([callback]));
+    for (const method of ['pushState', 'replaceState'] as const) {
+      const original = history[method];
+      history[method] = function (this: History, ...args: Parameters<History['pushState']>) {
+        const result = original.apply(this, args);
+        emit();
+        return result;
+      };
+    }
+    for (const event of ['popstate', 'hashchange']) win.addEventListener?.(event, emit);
+  }
+  callback(routeName(win.location.pathname, win.location.hash));
+}
+
 export function browserPlatform(): Platform {
   return {
     clock: realClock,
@@ -181,6 +210,7 @@ export function browserPlatform(): Platform {
     storage: browserStorage,
     transport: (appKey, host) => fetchTransport(appKey, host, () => fetch),
     development: developmentBuild,
+    screens: callback => watchScreens(globalThis, callback),
     onHidden(callback) {
       if (typeof document === 'undefined') return;
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') callback(); });

@@ -6,6 +6,17 @@ export interface PulseOptions {
   maxQueueAgeDays?: number;
   gzip?: boolean;
   /**
+   * Browser and native app wrappers: sends `pulse.screen_view` when the route changes (History API, `popstate`,
+   * `hashchange` and the first page). Default true. When false nothing is patched or listened to. Node never does it
+   * on its own; call `screen(name)`.
+   */
+  automaticScreenViews?: boolean;
+  /**
+   * Node and native app wrappers: sends `pulse.session_started`, `pulse.new_install` and `pulse.app_updated`. Default
+   * true. The portal can switch these off too; this option can only switch them off, never force them on.
+   */
+  automaticSignals?: boolean;
+  /**
    * Marks signals as test data and enables warnings. An explicit value always wins. When omitted, signals are marked
    * as test data only in a development build: in Node when `NODE_ENV` is `development` or `test` at `init`, in the
    * browser when the bundler replaced `process.env.NODE_ENV` with one of those values. Otherwise they count as real data.
@@ -34,6 +45,8 @@ export interface PulseClient {
   setUser(id: string | null): Promise<void>;
   flush(): Promise<void>;
   optOut(disabled: boolean): void;
+  /** Sends `pulse.screen_view` for a screen name (at most 128 characters). Repeating the same name is ignored. */
+  screen(name: string): void;
 }
 
 export interface SystemInfo {
@@ -78,6 +91,8 @@ export interface Storage {
   install?: InstallStore;
   /** Session statistics, kept next to the install id under the same rule. */
   usage?: { read(): Promise<string | null>; write(value: string): Promise<void>; remove(): Promise<void> };
+  /** The last settings from the portal, kept under the same rule as the install id. */
+  config?: { read(): Promise<string | null>; write(value: string): Promise<void>; remove(): Promise<void> };
   /** Consent records written by other instances. */
   watch?(callback: (consent: string | null) => void): void;
 }
@@ -99,6 +114,8 @@ export interface TransportResponse {
 export interface Transport {
   send(body: Uint8Array, gzip: boolean, keepalive: boolean): Promise<TransportResponse>;
   cancel(): void;
+  /** Reads the settings from the portal; `version` is the cached one, sent as `If-None-Match`. */
+  config?(version?: number): Promise<TransportResponse>;
 }
 
 export interface Environment {
@@ -119,4 +136,6 @@ export interface Platform {
   /** True only with positive evidence of a development build. Read once, at init. */
   development(): boolean;
   onHidden(callback: () => void): void;
+  /** Calls back with a screen name on the first page and on every route change; absent where there is no routing. */
+  screens?(callback: (name: string) => void): void;
 }

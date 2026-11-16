@@ -15,6 +15,8 @@ export const defaults = {
   maxQueueSize: 1000,
   maxQueueAgeDays: 7,
   gzip: true,
+  automaticScreenViews: true,
+  automaticSignals: true,
   debug: false,
   appVersion: '',
   appBuildNumber: '',

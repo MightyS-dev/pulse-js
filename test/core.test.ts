@@ -49,7 +49,7 @@ describe('v1 signals and privacy', () => {
     const unavailable = ['appBuildNumber', 'deviceModel'];
     expect(Object.keys(actual.system).sort()).toEqual(Object.keys(fixture[0]!.system).filter(k => !unavailable.includes(k)).sort());
     expect(actual).toMatchObject({ timestamp: '2026-11-13T08:00:00.000Z', type: 'purchase', value: 4.5, debug: false,
-      system: { platform: 'web', appVersion: '1.2.3', sdkName: 'pulse-js', sdkVersion: '0.9.3' }, props: { item: 'coins', amount: 2 } });
+      system: { platform: 'web', appVersion: '1.2.3', sdkName: 'pulse-js', sdkVersion: '0.9.4' }, props: { item: 'coins', amount: 2 } });
   });
 
   it('escapes JSON, keeps Unicode and finite numbers, converts booleans and rejects unsupported props', async () => {

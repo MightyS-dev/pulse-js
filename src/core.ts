@@ -1,6 +1,7 @@
 import { defaults, identity } from './config.js';
 import { batchFrom, restoreBatches, saveState } from './batch.js';
 import type { Batch } from './batch.js';
+import { ALL_ON, parseRemote } from './remote.js';
 import { ServerPolicy } from './server-policy.js';
 import { beginSession, parseUsage, usageFields } from './usage.js';
 import type { Usage } from './usage.js';
@@ -72,6 +73,8 @@ export function createPulse(platform: Platform): PulseClient {
   let usageText = '';
   let sessionStart = 0;
   let starts: [number, string][] = [];
+  let lastScreen = '';
+  let remote = ALL_ON;
 
   const warn = (message: string): void => {
     try { if (options.debug) env.warn(message); } catch { /* Logging cannot affect the application. */ }
@@ -79,6 +82,8 @@ export function createPulse(platform: Platform): PulseClient {
   const protect = (action: () => void): void => {
     try { action(); } catch { warn(FAILED); }
   };
+  // A signal type the portal has not switched off; automatic signals also need the portal's automatic switch.
+  const allowed = (type: string): boolean => remote.automatic && !remote.off.includes(type);
   const interval = (): number => (policy.intervalSeconds ?? options.flushIntervalSeconds) * 1000;
   const drop = (signals: Signal[]): void => { queue = queue.filter(s => !signals.includes(s)); };
   // Queue records carry the opt-out flag too, for storages without a separate consent record.
@@ -135,31 +140,49 @@ export function createPulse(platform: Platform): PulseClient {
     timer = clock.setTimeout(() => { timer = undefined; void flush(); }, due - clock.now());
   }
 
+  // Capture timestamps are strictly increasing at millisecond resolution: the later of the clock reading and the previous
+  // timestamp plus one millisecond. Signals are materialized in queue order, automatic ones first.
+  let lastStamp = -Infinity;
+  function stamp(reading: number): string {
+    lastStamp = Math.max(reading, lastStamp + 1);
+    return new Date(lastStamp).toISOString();
+  }
+
   function materialize(draft: Draft): Signal {
     let info = {} as SystemInfo;
     try { info = env.info(); } catch { warn(MISSING); }
     const clean = (v: string): string => typeof v === 'string' ? v.slice(0, 512) : '';
     const hash = draft.userHash ?? installHash;
+    const reading = Date.parse(draft.timestamp);
     const extra: Record<string, string> = {};
     for (const [key, value] of Object.entries(info)) if (typeof value === 'string' && value) extra[key] = value.slice(0, 64);
     // Statistics, app name and build exist only where something is stored for the app (Node, native app wrappers).
     const full = storage?.usage ? {
-      ...(usage ? usageFields(usage, Date.parse(draft.timestamp), sessionStart) : {}),
+      ...(usage ? usageFields(usage, reading, sessionStart) : {}),
       ...(options.appBuildNumber ? { appBuildNumber: options.appBuildNumber } : {}),
       ...(options.appName ? { appName: options.appName } : {}),
     } : {};
+    // Fields of a group the portal switched off are left out; the base keys below never are.
+    Object.assign(extra, full);
+    remote.hidden.forEach(key => { delete extra[key]; });
     return {
       ...draft,
+      timestamp: stamp(reading),
       ...(hash === undefined ? {} : { userHash: hash }),
       debug: options.debug,
       system: {
-        ...extra, ...full,
+        ...extra,
         platform: clean(info.platform), osName: clean(info.osName), osVersion: clean(info.osVersion),
         locale: clean(info.locale), appVersion: options.appVersion,
         ...(info.deviceModel ? { deviceModel: clean(info.deviceModel) } : {}),
         sdkName: identity.sdkName, sdkVersion: identity.version,
       },
     };
+  }
+
+  /** Turns drafts into queued signals. Screen views are judged here, once the cached settings are known, never at capture time. */
+  function admit(drafts: Draft[]): Signal[] {
+    return drafts.filter(d => d.type !== 'pulse.screen_view' || allowed(d.type)).map(materialize);
   }
 
   function track(type: string, input?: TrackOptions): void {
@@ -191,23 +214,40 @@ export function createPulse(platform: Platform): PulseClient {
       pending.push(...drafts);
       pending = pending.slice(-(initialized ? options.maxQueueSize : 100));
     } else {
-      queue.push(...drafts.map(materialize));
+      queue.push(...admit(drafts));
       prune();
       void save();
       schedule();
     }
   }
 
+  async function loadRemote(): Promise<void> {
+    remote = parseRemote(await storage?.config?.read().catch(() => null)) ?? ALL_ON;
+  }
+
+  /** Asks the portal for its settings once per launch. They apply from the next launch where storage exists, at once in a normal browser. */
+  async function refresh(): Promise<void> {
+    if (disabled || !transport?.config) return;
+    try {
+      const response = await transport.config(remote.version);
+      const parsed = parseRemote(response.body);
+      if (parsed && !disabled) { if (storage?.config) await storage.config.write(response.body!); else remote = parsed; }
+    } catch { /* The cache or the all-on default stays. */ }
+  }
+
   /** Registers a new session and returns the automatic signals that belong to its start. */
   function startSession(now: number, id: string): Draft[] {
-    const next = beginSession(usage, now, options.appVersion, options.appBuildNumber);
+    // The stored version moves on only when pulse.app_updated is queued, so an event that is switched off is sent once it is allowed.
+    const keep = usage && !(options.automaticSignals && allowed('pulse.app_updated'));
+    const next = beginSession(usage, now, keep ? usage!.ver : options.appVersion, keep ? usage!.build : options.appBuildNumber);
     usage = next.usage;
     sessionStart = now;
-    saveUsage();
     const make = (type: string, props: Draft['props'] = {}): Draft => ({
       type, props, timestamp: new Date(now).toISOString(), sessionId: id, ...(userHash === undefined ? {} : { userHash }),
     });
-    const out = [...fresh ? [make('pulse.new_install')] : [], ...next.changed ? [make('pulse.app_updated', { previousVersion: next.changed[0], previousBuild: next.changed[1] })] : [], make('pulse.session_started')];
+    const out = [...fresh ? [make('pulse.new_install')] : [], ...next.changed ? [make('pulse.app_updated', { previousVersion: next.changed[0], previousBuild: next.changed[1] })] : [], make('pulse.session_started')]
+      .filter(d => options.automaticSignals && allowed(d.type));
+    saveUsage();
     fresh = false;
     return out;
   }
@@ -236,7 +276,8 @@ export function createPulse(platform: Platform): PulseClient {
     usageLoaded = false;
     usageText = '';
     starts = [];
-    usageOps = usageOps.then(() => storage?.usage?.remove()).catch(() => warn(STORAGE));
+    // The cached settings go with the statistics.
+    usageOps = usageOps.then(() => Promise.allSettled([storage?.usage?.remove(), storage?.config?.remove()])).then(results => { if (results.some(r => r.status === 'rejected')) warn(STORAGE); });
     return usageOps;
   }
 
@@ -375,7 +416,8 @@ export function createPulse(platform: Platform): PulseClient {
         if (!valid(id)) {
           id = env.installId();
           const kept = await store.write(id).catch(() => { failed = true; warn(STORAGE); });
-          if (valid(kept)) id = kept; else fresh ||= !failed;
+          // A store that returns another id lost the race to another process, which reports the new install; one that returns ours (or nothing) created it here.
+          if (valid(kept) && kept !== id) id = kept; else fresh ||= !failed;
         }
         const hash = await env.hashUser(id);
         if (generation === installGeneration && !disabled && /^[a-f0-9]{64}$/.test(hash)) installHash = hash;
@@ -387,6 +429,10 @@ export function createPulse(platform: Platform): PulseClient {
     installHash = undefined;
     ++installGeneration;
     return serial(async () => { try { await storage?.install?.remove(); } catch { warn(STORAGE); } });
+  }
+
+  function installHook(): void {
+    if (options.automaticScreenViews && allowed('pulse.screen_view')) protect(() => platform.screens?.(screen));
   }
 
   function init(appKey: string, input: PulseOptions = {}): void {
@@ -406,6 +452,8 @@ export function createPulse(platform: Platform): PulseClient {
         // The server rejects signals older than 30 days; one day of margin covers clock skew.
         maxQueueAgeDays: Math.min(29, numeric('maxQueueAgeDays', 1 / 86400, 30)),
         gzip: input.gzip !== false,
+        automaticScreenViews: input.automaticScreenViews !== false,
+        automaticSignals: input.automaticSignals !== false,
         debug: typeof input.debug === 'boolean' ? input.debug : platform.development(),
         appVersion: typeof input.appVersion === 'string' ? wellFormed(input.appVersion.slice(0, 512)) : '',
         appBuildNumber: typeof input.appBuildNumber === 'string' ? wellFormed(input.appBuildNumber.slice(0, 64)) : '',
@@ -440,24 +488,28 @@ export function createPulse(platform: Platform): PulseClient {
           } catch { warn(STORAGE); }
         }
         disabled = explicitConsent ?? (store.consent ? optedOut(consent, true) : out);
-        if (disabled) { await removeInstall(); await removeUsage(); } else { await loadInstall(); await loadUsage(); }
+        if (disabled) { await removeInstall(); await removeUsage(); } else { await loadRemote(); await loadInstall(); await loadUsage(); }
         hydrated = true;
         if (disabled) { pending = []; queue = []; work = []; userHash = undefined; ++userGeneration; }
         else {
           const began = starts.splice(0).flatMap(([at, id]) => usageLoaded ? startSession(at, id) : []);
-          queue = queue.concat([...began, ...pending].map(materialize));
+          queue = queue.concat(admit([...began, ...pending]));
         }
         pending = [];
+        // Where settings are stored they are read first; the hook is installed only if they allow screen views.
+        if (store.config) installHook();
         // Writes only a change made here before loading; a change that arrived from another instance is already stored.
         if (disabled !== optedOut(consent, true)) persistConsent();
         prune();
         await save();
         protect(() => claimed?.done());
         schedule();
+        void refresh();
       })().catch(() => warn(FAILED));
       // Opt-out in another tab applies here at once; only an explicit optOut(false) enables collection again.
       protect(() => store.watch?.(record => { if (record !== null) protect(() => consent(optedOut(record, true), false)); }));
       protect(() => platform.onHidden(() => { void flush(true); }));
+      if (!store.config) installHook();
     });
   }
 
@@ -487,7 +539,7 @@ export function createPulse(platform: Platform): PulseClient {
       void loadInstall().then(loadUsage).finally(() => {
         protect(() => {
           if (--installing) return;
-          if (!disabled) queue.push(...[...starts.splice(0).flatMap(([at, id]) => usageLoaded ? startSession(at, id) : []), ...pending].map(materialize));
+          if (!disabled) queue.push(...admit([...starts.splice(0).flatMap(([at, id]) => usageLoaded ? startSession(at, id) : []), ...pending]));
           pending = [];
           prune();
           void save();
@@ -504,5 +556,17 @@ export function createPulse(platform: Platform): PulseClient {
     protect(() => { if (typeof value === 'boolean') consent(value, true); });
   }
 
-  return { init, track, setUser, flush: () => flush(), optOut };
+  function screen(name: string): void {
+    protect(() => {
+      if (disabled || typeof name !== 'string') return;
+      const clean = wellFormed(name).slice(0, 128);
+      // The same screen again, with no other screen in between, is not a new appearance.
+      if (!clean.trim() || clean === lastScreen) return;
+      const previous = lastScreen;
+      lastScreen = clean;
+      track('pulse.screen_view', { props: { screen: clean, ...(previous ? { previousScreen: previous } : {}) } });
+    });
+  }
+
+  return { init, track, setUser, flush: () => flush(), optOut, screen };
 }

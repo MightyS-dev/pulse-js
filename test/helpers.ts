@@ -4,6 +4,13 @@ import { vi } from 'vitest';
 import { createPulse } from '../src/core.js';
 import type { Platform, PulseOptions, Signal, Storage, TransportResponse } from '../src/types.js';
 
+// Existing tests count signal requests; the settings request is answered here without reaching their mocks.
+const quiet = (fn: (...args: any[]) => unknown): typeof fn => new Proxy(fn, {
+  apply: (target, self, args: unknown[]) => String(args[0]).endsWith('/api/v1/config') ? Promise.resolve(new Response('', { status: 404 })) : Reflect.apply(target, self, args),
+});
+const stub = vi.stubGlobal.bind(vi);
+vi.stubGlobal = ((name: string, value: unknown) => stub(name, name === 'fetch' && typeof value === 'function' ? quiet(value as never) : value)) as typeof vi.stubGlobal;
+
 export class MemoryStorage implements Storage {
   value: string | null = null;
   history: string[] = [];
@@ -31,6 +38,7 @@ export function harness(storage: Storage = new MemoryStorage()) {
   const requests: { body: Uint8Array; gzip: boolean; keepalive: boolean }[] = [];
   const responses: (TransportResponse | Error)[] = [];
   let hidden = (): void => {};
+  const screens: ((name: string) => void)[] = [];
   let id = 0;
   let development = false;
   const platform: Platform = {
@@ -59,11 +67,13 @@ export function harness(storage: Storage = new MemoryStorage()) {
     }),
     development: () => development,
     onHidden: callback => { hidden = callback; },
+    screens: callback => { screens.push(callback); },
   };
   const client = createPulse(platform);
   return {
     client, platform, requests, responses, storage,
     hide: () => hidden(),
+    screens,
     setDevelopment(value: boolean) { development = value; },
     async start(options: PulseOptions = {}) { client.init('synthetic-app-key', options); await settle(); },
     signals(index = 0): Signal[] {

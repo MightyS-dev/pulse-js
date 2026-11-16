@@ -1,6 +1,6 @@
 # MightyS Pulse for JavaScript
 
-Privacy-first analytics for web apps, browser games and Node.js. No cookies, no device IDs, offline queue, under 8 kB gzipped.
+Privacy-first analytics for web apps, browser games and Node.js. No cookies, no device IDs, offline queue, under 9 kB gzipped.
 
 Docs: https://pulse.mightys.dev/docs/javascript/
 
@@ -83,13 +83,38 @@ Do not put personal data in signal names, properties or app versions: they are s
 | `maxQueueSize` | `1000` | Integer from 1 to 100000. |
 | `maxQueueAgeDays` | `7` | Number up to 30. Values above 29 act as 29. |
 | `gzip` | `true` | Compresses request bodies above 1024 bytes. |
+| `automaticScreenViews` | `true` | Browser and native app wrappers: sends `pulse.screen_view` on route changes. `false` installs nothing. See Screen views below. |
+| `automaticSignals` | `true` | Node and native app wrappers: sends `pulse.session_started`, `pulse.new_install` and `pulse.app_updated`. It can only switch them off; see Settings from the portal below. |
 | `debug` | development builds: `true`; otherwise `false` | Marks signals as test data and enables warnings, which never contain signal or user data. See Test mode below. |
 | `appVersion` | `''` | String of at most 512 UTF-16 code units. |
 | `appBuildNumber` | `''` | Node and native app wrappers. String of at most 64 characters. |
 | `appName` | `''` | Node and native app wrappers. String of at most 64 characters. |
-| `storagePath` | per-process files under `~/.mightys-pulse/` | Node only. A queue file for exactly one process; consent is stored in `<storagePath>.consent`, the install id in `<storagePath>.install-id` and the usage statistics in `<storagePath>.usage`. |
+| `storagePath` | per-process files under `~/.mightys-pulse/` | Node only. A queue file for exactly one process; consent is stored in `<storagePath>.consent`, the install id in `<storagePath>.install-id` and the usage statistics in `<storagePath>.usage` and the portal settings in `<storagePath>.config`. |
 
 Invalid numeric and boolean values fall back to their defaults.
+
+## Screen views
+
+In a browser and in a native app wrapper the SDK sends a `pulse.screen_view` signal for the first page and for every route change (`history.pushState`, `history.replaceState`, back and forward, and `hashchange`). It has two props: `screen` and, once there was an earlier screen, `previousScreen`.
+
+- The name is the route path only (the hash path for hash routers such as `#/level/3`). Query, fragment, the full URL and the page title are never read. Numeric and uuid-like segments become `:id`, so `/user/42/orders` is sent as `/user/:id/orders`. Names are at most 128 characters.
+- The same name twice in a row is sent once.
+- A normal browser sends it too and stores nothing for it. Opt-out and `debug` apply as for any signal.
+- The History API is wrapped once; the original method always runs first.
+- To switch it off, pass `automaticScreenViews: false`. Nothing is then wrapped or listened to.
+- Node.js never sends screen views on its own. In any environment, `Pulse.screen('Menu')` sends one by name (the same limits and dedupe apply).
+
+## Settings from the portal
+
+The portal can switch things off for your app without a package update: screen views, the automatic signals (together or one type at a time), and groups of fields (device, screen, settings, network, app, usage). Everything is on by default.
+
+- The SDK asks for the settings once per launch, in the background, and never waits for the answer. A failed request changes nothing.
+- In Node.js and native app wrappers the answer is kept next to the install id (`<storagePath>.config`, `config-<first 16 hex of the app key hash>` under `~/.mightys-pulse/`, or `localStorage` under `mightys-pulse:config:<app key>`) and applies from the next launch. Opt-out deletes it with the rest.
+- A normal browser stores nothing: the settings are asked for once per page load and apply to the rest of that page. Signals sent before the answer arrives use the defaults.
+- When the settings cannot be read (offline, an error, no answer yet), everything is on.
+- Options in code can only switch things off: `automaticScreenViews: false` and `automaticSignals: false` stay off whatever the portal says, and they never turn on what the portal switched off.
+- A group that is switched off leaves its fields out of every signal. The base fields (platform, OS, app version, locale, SDK name and version, device model) are always sent.
+- If you opt out and back in during a run, the settings are asked for again at the next launch.
 
 ## Test mode
 

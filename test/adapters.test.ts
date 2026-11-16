@@ -15,8 +15,24 @@ import { runInNewContext } from 'node:vm';
 import type { Signal } from '../src/types.js';
 import { settle } from './helpers.js';
 
-beforeEach(() => { vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('Unexpected network request in offline tests.'); })); });
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+// A client a test leaves behind keeps its retry timer. Left alone, that timer fires during a later test, on slow runs, and
+// sends through that test's fetch mock. Timers made while a test runs are cleared when it ends.
+const realSetTimeout = globalThis.setTimeout;
+const leftover = new Set<ReturnType<typeof setTimeout>>();
+beforeEach(() => {
+  globalThis.setTimeout = ((fn: (...args: unknown[]) => void, ms?: number, ...args: unknown[]) => {
+    const handle = realSetTimeout(() => { leftover.delete(handle); fn(...args); }, ms);
+    leftover.add(handle);
+    return handle;
+  }) as typeof setTimeout;
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('Unexpected network request in offline tests.'); }));
+});
+afterEach(() => {
+  vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers();
+  globalThis.setTimeout = realSetTimeout;
+  for (const handle of leftover) clearTimeout(handle);
+  leftover.clear();
+});
 
 function browser() {
   const values = new Map<string, string>();
@@ -322,6 +338,7 @@ describe('Node adapter and published entry points', () => {
       `import { Pulse } from ${JSON.stringify(pathToFileURL(resolve('dist/node.js')).href)};`,
       'const mode = process.argv[2]; const sent = []; let calls = 0;',
       'globalThis.fetch = async (url, init) => {',
+      '  if (url.endsWith("/api/v1/config")) return new Response("", { status: 404 });',
       '  calls++; if (mode === "offline") throw new Error("offline");',
       '  sent.push(JSON.parse(Buffer.from(init.body).toString("utf8")).filter(s => !s.type.startsWith("pulse.")).map(s => [s.type, s.system.sdkName]));',
       '  return calls === 1 ? new Response("", { status: 429, headers: { "Retry-After": "1" } }) : new Response("", { status: 202 });',
@@ -351,7 +368,7 @@ describe('Node adapter and published entry points', () => {
     const esm = await import('../dist/node.js'); const web = await import('../dist/web.js');
     const require = createRequire(import.meta.url);
     for (const entry of [esm, web, require('../dist/node.cjs'), require('../dist/web.cjs')]) {
-      expect(Object.keys(entry.Pulse).sort()).toEqual(['flush', 'init', 'optOut', 'setUser', 'track']);
+      expect(Object.keys(entry.Pulse).sort()).toEqual(['flush', 'init', 'optOut', 'screen', 'setUser', 'track']);
     }
     expect(fetch).not.toHaveBeenCalled();
   });

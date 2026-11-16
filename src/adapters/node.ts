@@ -49,11 +49,13 @@ function installFile(path: string): InstallStore {
 }
 
 /** A queue file plus a consent file. A consent file that exists but cannot be read is treated as opted out. */
-export function fileStorage(path: string, consentPath = `${path}.consent`, installPath = `${path}.install-id`, usagePath = `${path}.usage`): Storage {
+export function fileStorage(path: string, consentPath = `${path}.consent`, installPath = `${path}.install-id`, usagePath = `${path}.usage`, configPath = `${path}.config`): Storage {
   return resilientStorage({
     install: installFile(installPath),
     usage: { read: () => readText(usagePath), write: value => writeText(usagePath, value),
       remove: () => unlink(usagePath).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }) },
+    config: { read: () => readText(configPath), write: value => writeText(configPath, value),
+      remove: () => unlink(configPath).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }) },
     read: () => readText(path),
     write: value => writeText(path, value),
     consent: { read: () => readText(consentPath), write: value => writeText(consentPath, value) },
@@ -74,7 +76,7 @@ export function instanceStorage(directory: string, key: string, pid = process.pi
   const name = (): string => join(directory, `${key}.${pid}.${randomUUID()}.queue`);
   const pattern = /^([0-9a-f]{64})\.(\d+)\.[0-9a-f-]{36}\.queue$/;
   return {
-    ...fileStorage(name(), join(directory, `${key}.json`), join(directory, `install-id-${key.slice(0, 16)}`), join(directory, `usage-${key.slice(0, 16)}`)),
+    ...fileStorage(name(), join(directory, `${key}.json`), join(directory, `install-id-${key.slice(0, 16)}`), join(directory, `usage-${key.slice(0, 16)}`), join(directory, `config-${key.slice(0, 16)}`)),
     async claim() {
       const values: string[] = [];
       const taken: string[] = [];
