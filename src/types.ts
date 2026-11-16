@@ -112,7 +112,7 @@ export interface TransportResponse {
 }
 
 export interface Transport {
-  send(body: Uint8Array, gzip: boolean, keepalive: boolean): Promise<TransportResponse>;
+  send(body: Uint8Array, gzip: boolean, keepalive: boolean, batch?: string): Promise<TransportResponse>;
   cancel(): void;
   /** Reads the settings from the portal; `version` is the cached one, sent as `If-None-Match`. */
   config?(version?: number): Promise<TransportResponse>;

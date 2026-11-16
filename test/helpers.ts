@@ -35,7 +35,7 @@ export async function settle(): Promise<void> {
 }
 
 export function harness(storage: Storage = new MemoryStorage()) {
-  const requests: { body: Uint8Array; gzip: boolean; keepalive: boolean }[] = [];
+  const requests: { body: Uint8Array; gzip: boolean; keepalive: boolean; batch?: string | undefined }[] = [];
   const responses: (TransportResponse | Error)[] = [];
   let hidden = (): void => {};
   const screens: ((name: string) => void)[] = [];
@@ -57,8 +57,8 @@ export function harness(storage: Storage = new MemoryStorage()) {
     },
     storage: () => storage,
     transport: () => ({
-      async send(body, gzip, keepalive) {
-        requests.push({ body: new Uint8Array(body), gzip, keepalive });
+      async send(body, gzip, keepalive, batch) {
+        requests.push({ body: new Uint8Array(body), gzip, keepalive, batch });
         const response = responses.shift() ?? { status: 202 };
         if (response instanceof Error) throw response;
         return response;

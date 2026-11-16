@@ -49,7 +49,7 @@ describe('v1 signals and privacy', () => {
     const unavailable = ['appBuildNumber', 'deviceModel'];
     expect(Object.keys(actual.system).sort()).toEqual(Object.keys(fixture[0]!.system).filter(k => !unavailable.includes(k)).sort());
     expect(actual).toMatchObject({ timestamp: '2026-11-13T08:00:00.000Z', type: 'purchase', value: 4.5, debug: false,
-      system: { platform: 'web', appVersion: '1.2.3', sdkName: 'pulse-js', sdkVersion: '0.9.4' }, props: { item: 'coins', amount: 2 } });
+      system: { platform: 'web', appVersion: '1.2.3', sdkName: 'pulse-js', sdkVersion: '0.9.5' }, props: { item: 'coins', amount: 2 } });
   });
 
   it('escapes JSON, keeps Unicode and finite numbers, converts booleans and rejects unsupported props', async () => {
@@ -486,7 +486,7 @@ describe('lifecycle, consent and public failures', () => {
     for (const type of ['a', 'b', 'c', 'd']) h.client.track(type); await h.client.flush();
     h.client.track('e'); h.client.track('f'); await settle();
     const saved = JSON.parse(store.value!); expect(saved.queue.map((s: Signal) => s.type)).toEqual(['c', 'd', 'b', 'e', 'f']);
-    expect(saved.batches).toEqual([{ indices: [0, 1] }]);
+    expect(saved.batches).toEqual([{ indices: [0, 1], id: expect.stringMatching(/^[a-f0-9]{32}$/) }]);
     vi.clearAllTimers(); const next = harness(store); await next.start({ gzip: false }); await next.client.flush();
     expect(next.requests.map((_, i) => next.signals(i).map(s => s.type))).toEqual([['c', 'd'], ['b', 'e', 'f']]);
   });

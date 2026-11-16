@@ -56,9 +56,9 @@ export function fetchTransport(appKey: string, host: string, getFetch: () => typ
   }
   return {
     // 12 seconds plus 1 second per 32000 bytes, so large bodies on slow links are not cut off early.
-    send: (body, gzip, keepalive) => request('signals', 12000 + (body.byteLength >> 5), {
+    send: (body, gzip, keepalive, batch) => request('signals', 12000 + (body.byteLength >> 5), {
       method: 'POST', body: body as Uint8Array<ArrayBuffer>, keepalive,
-      headers: { 'Content-Type': 'application/json', ...(gzip ? { 'Content-Encoding': 'gzip' } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(gzip ? { 'Content-Encoding': 'gzip' } : {}), ...(batch ? { 'X-Pulse-Batch': batch } : {}) },
     }, async response => ({ status: response.status, body: await response.text(), retryAfter: response.headers.get('Retry-After') })),
     config: version => request('config', 10000, { headers: version ? { 'If-None-Match': `"${version}"` } : {} },
       async response => response.status === 200 ? { status: 200, body: await response.text() } : { status: response.status }),

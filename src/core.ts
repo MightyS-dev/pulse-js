@@ -281,6 +281,11 @@ export function createPulse(platform: Platform): PulseClient {
     return usageOps;
   }
 
+  /** A new batch id, 32 lowercase hex characters; none (the header is left out) where no secure generator exists. */
+  function batchId(): string | undefined {
+    try { return env.installId(); } catch { warn(MISSING); }
+  }
+
   /** Starts a new batch from queued signals that no prepared batch holds yet. */
   function selectBatch(limit: number): Batch | undefined {
     const selected: Signal[] = [];
@@ -292,7 +297,7 @@ export function createPulse(platform: Platform): PulseClient {
       bytes += length;
     }
     if (!selected.length) return;
-    const batch = batchFrom(selected);
+    const batch = batchFrom(selected, batchId());
     work.push(batch);
     return batch;
   }
@@ -306,7 +311,7 @@ export function createPulse(platform: Platform): PulseClient {
   /** Halves keep splitting on later rejections, isolating single bad signals in about 2*log2(n) extra requests. */
   function split(batch: Batch): void {
     const half = Math.ceil(batch.signals.length / 2);
-    work.splice(work.indexOf(batch), 1, batchFrom(batch.signals.slice(0, half)), batchFrom(batch.signals.slice(half)));
+    work.splice(work.indexOf(batch), 1, batchFrom(batch.signals.slice(0, half), batchId()), batchFrom(batch.signals.slice(half), batchId()));
   }
 
   async function drain(keepalive: boolean): Promise<void> {
@@ -330,7 +335,7 @@ export function createPulse(platform: Platform): PulseClient {
         if (keepalive && batch.body.byteLength > 65536) break;
         await save();
         if (disabled || stopped) break;
-        const response = await transport.send(batch.body, batch.gzip, keepalive);
+        const response = await transport.send(batch.body, batch.gzip, keepalive, batch.id);
         if (disabled) break;
         policy.apply(response.body, clock.now(), options.flushIntervalSeconds);
         const status = response.status;
@@ -482,7 +487,7 @@ export function createPulse(platform: Platform): PulseClient {
             const state = JSON.parse(record ?? 'null') as { version?: unknown; queue?: unknown; batches?: unknown } | null;
             if (state?.version === 1) {
               const loaded = (state.queue as unknown[]).map(s => validStored(s, clock.now(), options.maxQueueAgeDays) ? s : undefined);
-              work.push(...restoreBatches(state.batches, loaded));
+              work.push(...restoreBatches(state.batches, loaded, batchId));
               queue.push(...loaded.filter((s): s is Signal => !!s));
             }
           } catch { warn(STORAGE); }

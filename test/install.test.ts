@@ -65,7 +65,7 @@ describe('anonymous install id in the core', () => {
   it('sends no userHash and stores nothing when the platform has no install storage', async () => {
     const h = harness(); await h.start({ gzip: false }); h.client.track('plain'); await h.client.flush();
     expect(h.signals()[0]).not.toHaveProperty('userHash');
-    expect((h.storage as InstallStorage).history.join('')).not.toMatch(/[a-f0-9]{32}/);
+    expect((h.storage as InstallStorage).history.join('').replace(/"id":"[a-f0-9]{32}"/g, '')).not.toMatch(/[a-f0-9]{32}/);  // a batch id belongs to one batch, never to the device
   });
 
   it('starts opted out without creating or keeping an id', async () => {

@@ -134,6 +134,7 @@ Pulse.init(key, { debug: location.hostname === 'localhost' }); // or, in Vite: {
 - Failed requests (network errors, 408, 425, 429, 5xx) are retried with exponential backoff from 1 second to 5 minutes, honouring `Retry-After` up to one hour. A 401 keeps the queue and stops sending until reload.
 - When the server asks for a pause or a different interval, the SDK follows it.
 - In browsers, when the page is hidden or unloading, the SDK makes one best-effort keepalive request. If the browser drops it, the signals stay queued and are sent from the next page.
+- Each batch carries an id, so a batch sent again after a lost answer is stored only once.
 - Delivery is at least once: a signal can arrive twice, for example when a response is lost after the server accepted the request.
 - Each browser tab keeps its own queue. A queue left by a closed tab is adopted by the next tab that starts. In Node, queue files of exited processes are adopted at start.
 - Request bodies are gzipped when larger than 1024 bytes and never exceed 1 MiB or 1000 signals.
