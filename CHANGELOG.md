@@ -2,6 +2,13 @@
 
 All notable changes to this package are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the package uses [Semantic Versioning](https://semver.org/).
 
+## [0.9.6] - 2026-11-16
+
+### Fixed
+
+- A new session starts after 30 minutes without signals, also across page loads and after a long gap, measured from the previous captured signal. A clock that moves back by 30 minutes or more also starts a new session.
+- In a browser or native app wrapper the SDK sends, stores and requests nothing from crawlers and automated browsers (`navigator.webdriver` true, or a user agent of a known crawler, headless browser or page-speed tool). The new option `allowAutomatedBrowsers: true` turns this off for test harnesses.
+
 ## [0.9.5] - 2026-11-16
 
 ### Fixed

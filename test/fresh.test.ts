@@ -27,7 +27,7 @@ afterEach(async () => {
   globalThis.fetch = original;
   vi.unstubAllGlobals();
   if (!resolve(directory).startsWith(resolve('.test-storage') + sep)) throw new Error('Unsafe test cleanup path.');
-  await rm(directory, { recursive: true, force: true });
+  await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 async function launch(platform: Platform, options: object = {}): Promise<string[]> {

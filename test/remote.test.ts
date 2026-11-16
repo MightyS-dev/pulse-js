@@ -274,7 +274,7 @@ describe('request and storage locations', () => {
     beforeEach(async () => { vi.useRealTimers(); await mkdir('.test-storage', { recursive: true }); directory = await mkdtemp(resolve('.test-storage/config-')); });
     afterEach(async () => {
       if (!resolve(directory).startsWith(resolve('.test-storage') + sep)) throw new Error('Unsafe test cleanup path.');
-      await rm(directory, { recursive: true, force: true });
+      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     });
 
     it('uses <storagePath>.config and config-<16 hex of the key hash> in the default layout', async () => {

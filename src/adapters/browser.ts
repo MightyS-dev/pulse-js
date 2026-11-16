@@ -19,6 +19,13 @@ export function inWrapper(win: Record<string, any> = globalThis, ua: string = wi
   } catch { return false; }
 }
 
+const BOTS = /googlebot|bingbot|applebot|duckduckbot|yandexbot|baiduspider|facebookexternalhit|twitterbot|linkedinbot|slackbot|discordbot|headlesschrome|lighthouse|pagespeed|gtmetrix|pingdom|bot\/|crawler|spider/i;
+
+/** True for an automated browser (webdriver) or, outside a native app wrapper, a user agent of a known crawler or tool. */
+export function automatedBrowser(nav: { userAgent?: string; webdriver?: boolean } | undefined, wrapped = false): boolean {
+  try { return nav?.webdriver === true || (!wrapped && BOTS.test(nav?.userAgent ?? '')); } catch { return false; }
+}
+
 const media = (query: string): boolean | undefined => {
   try { return globalThis.matchMedia?.(query)?.matches; } catch { return undefined; }
 };
@@ -210,6 +217,7 @@ export function browserPlatform(): Platform {
     storage: browserStorage,
     transport: (appKey, host) => fetchTransport(appKey, host, () => fetch),
     development: developmentBuild,
+    automated: () => automatedBrowser(globalThis.navigator, inWrapper()),
     screens: callback => watchScreens(globalThis, callback),
     onHidden(callback) {
       if (typeof document === 'undefined') return;

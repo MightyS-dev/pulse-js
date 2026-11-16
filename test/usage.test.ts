@@ -68,7 +68,7 @@ describe('Node files', () => {
   beforeEach(async () => { vi.useRealTimers(); await mkdir('.test-storage', { recursive: true }); directory = await mkdtemp(resolve('.test-storage/usage-')); });
   afterEach(async () => {
     if (!resolve(directory).startsWith(resolve('.test-storage') + sep)) throw new Error('Unsafe test cleanup path.');
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it('keeps the usage file next to the install id file, in both layouts', async () => {

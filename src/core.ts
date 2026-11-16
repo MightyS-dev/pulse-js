@@ -38,6 +38,7 @@ export function createPulse(platform: Platform): PulseClient {
   let disabled = false;
   let explicitConsent: boolean | undefined;
   let stopped = false;
+  let blocked = false;
   let noGzip = false;
   let queue: Signal[] = [];
   let stored: Signal[] = [];
@@ -187,11 +188,12 @@ export function createPulse(platform: Platform): PulseClient {
 
   function track(type: string, input?: TrackOptions): void {
     protect(() => {
-      if (disabled) return;
+      if (disabled || blocked) return;
       const fields = normalize(type, input, () => warn(DISCARDED));
       if (!fields) { warn(DISCARDED); return; }
       const now = clock.now();
-      const begins = !session || now - lastActivity >= 1800000;
+      // Idle is measured from the previous captured signal; a clock that moved back by that much also ends the session.
+      const begins = !session || Math.abs(now - lastActivity) >= 1800000;
       if (begins) session = env.sessionId();
       lastActivity = now;
       // Session statistics wait for the stored record; sessions begun before it is read start in order afterwards.
@@ -464,6 +466,8 @@ export function createPulse(platform: Platform): PulseClient {
         appBuildNumber: typeof input.appBuildNumber === 'string' ? wellFormed(input.appBuildNumber.slice(0, 64)) : '',
         appName: typeof input.appName === 'string' ? wellFormed(input.appName.slice(0, 64)) : '',
       };
+      // A crawler or automated browser sends and stores nothing: no storage, no transport, no timers.
+      if (input.allowAutomatedBrowsers !== true && platform.automated?.()) { blocked = initialized = true; pending = []; return; }
       const store = storage = platform.storage(appKey, input);
       transport = platform.transport(appKey, options.host);
       initialized = true;
@@ -522,7 +526,7 @@ export function createPulse(platform: Platform): PulseClient {
     const generation = ++userGeneration;
     try {
       userHash = undefined;
-      if (disabled || !id || typeof id !== 'string') return;
+      if (disabled || blocked || !id || typeof id !== 'string') return;
       const hash = await env.hashUser(id);
       if (generation === userGeneration && !disabled && /^[a-f0-9]{64}$/.test(hash)) userHash = hash;
     } catch { warn(MISSING); }

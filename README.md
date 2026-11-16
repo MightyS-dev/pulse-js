@@ -45,7 +45,7 @@ Public calls do not throw and their promises do not reject. Signals tracked befo
 
 ## What is sent and what is never sent
 
-Sent with every signal: your signal name, optional number and properties, a UTC timestamp, the debug flag, a random session id, the platform (`web`, `node` or `mobile`), coarse OS name and version when available, locale, your configured app version, and the SDK name and version. What else is sent depends on where the code runs. A field the platform cannot give is left out.
+Sent with every signal: your signal name, optional number and properties, a UTC timestamp, the debug flag, a random session id, the platform (`web`, `node` or `mobile`), coarse OS name and version when available, locale, your configured app version, and the SDK name and version. What else is sent depends on where the code runs. A field the platform cannot give is left out. In a browser, the SDK sends nothing from crawlers and automated browsers.
 
 | Where | Extra fields |
 | --- | --- |
@@ -84,6 +84,7 @@ Do not put personal data in signal names, properties or app versions: they are s
 | `maxQueueAgeDays` | `7` | Number up to 30. Values above 29 act as 29. |
 | `gzip` | `true` | Compresses request bodies above 1024 bytes. |
 | `automaticScreenViews` | `true` | Browser and native app wrappers: sends `pulse.screen_view` on route changes. `false` installs nothing. See Screen views below. |
+| `allowAutomatedBrowsers` | `false` | Browser and native app wrappers: by default nothing is sent, stored or requested when `navigator.webdriver` is true or the user agent names a known crawler, headless browser or page-speed tool (inside a native app wrapper only `webdriver` counts). Set `true` in a test harness that drives a real browser. |
 | `automaticSignals` | `true` | Node and native app wrappers: sends `pulse.session_started`, `pulse.new_install` and `pulse.app_updated`. It can only switch them off; see Settings from the portal below. |
 | `debug` | development builds: `true`; otherwise `false` | Marks signals as test data and enables warnings, which never contain signal or user data. See Test mode below. |
 | `appVersion` | `''` | String of at most 512 UTF-16 code units. |

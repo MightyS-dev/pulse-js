@@ -267,7 +267,7 @@ describe('Node adapter and published entry points', () => {
   afterEach(async () => {
     const root = resolve('.test-storage') + sep;
     if (!resolve(directory).startsWith(root)) throw new Error('Unsafe test cleanup path.');
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
   it('atomically saves new files, restores across instances, recovers corruption, and leaves no temporary files', async () => {

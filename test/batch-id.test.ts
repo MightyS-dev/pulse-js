@@ -121,7 +121,7 @@ describe('fetch transport', () => {
 describe('Node file queue', () => {
   let directory = '';
   beforeEach(async () => { directory = await mkdtemp(join(tmpdir(), 'pulse-batch-')); });
-  afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
+  afterEach(async () => { await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
   it('persists the in-flight batch id in the queue file and reuses it after a restart', async () => {
     const path = join(directory, 'queue.json');

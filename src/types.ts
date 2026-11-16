@@ -17,6 +17,12 @@ export interface PulseOptions {
    */
   automaticSignals?: boolean;
   /**
+   * Browser and native app wrappers: by default nothing is sent from crawlers and automated browsers (`navigator.webdriver`
+   * is true, or the user agent names a known crawler, headless browser or page-speed tool). Set true in a test harness
+   * that drives a real browser. Default false.
+   */
+  allowAutomatedBrowsers?: boolean;
+  /**
    * Marks signals as test data and enables warnings. An explicit value always wins. When omitted, signals are marked
    * as test data only in a development build: in Node when `NODE_ENV` is `development` or `test` at `init`, in the
    * browser when the bundler replaced `process.env.NODE_ENV` with one of those values. Otherwise they count as real data.
@@ -136,6 +142,8 @@ export interface Platform {
   /** True only with positive evidence of a development build. Read once, at init. */
   development(): boolean;
   onHidden(callback: () => void): void;
+  /** True in a crawler or automated browser; absent where that cannot apply (Node). */
+  automated?(): boolean;
   /** Calls back with a screen name on the first page and on every route change; absent where there is no routing. */
   screens?(callback: (name: string) => void): void;
 }
