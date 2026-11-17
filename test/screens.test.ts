@@ -94,7 +94,7 @@ describe('screen views in the core', () => {
     expect(h.screens).toHaveLength(1);
     h.screens[0]!('/home'); h.screens[0]!('/home'); h.screens[0]!('/shop'); h.screens[0]!('/home');
     const out = await sent(h);
-    expect(out.map(s => s.props)).toEqual([{ screen: '/home' }, { screen: '/shop', previousScreen: '/home' }, { screen: '/home', previousScreen: '/shop' }]);
+    expect(out.map(s => s.props)).toEqual([{ screen: '/home' }, { screen: '/shop', previousScreen: '/home', previousScreenSeconds: 0 }, { screen: '/home', previousScreen: '/shop', previousScreenSeconds: 0 }]);
     expect(out[0]!.system.sdkName).toBeTruthy();
   });
 

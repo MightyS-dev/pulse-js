@@ -4,9 +4,9 @@ import { vi } from 'vitest';
 import { createPulse } from '../src/core.js';
 import type { Platform, PulseOptions, Signal, Storage, TransportResponse } from '../src/types.js';
 
-// Existing tests count signal requests; the settings request is answered here without reaching their mocks.
+// Existing tests count signal requests; the settings and App Control requests are answered here without reaching their mocks.
 const quiet = (fn: (...args: any[]) => unknown): typeof fn => new Proxy(fn, {
-  apply: (target, self, args: unknown[]) => String(args[0]).endsWith('/api/v1/config') ? Promise.resolve(new Response('', { status: 404 })) : Reflect.apply(target, self, args),
+  apply: (target, self, args: unknown[]) => /\/api\/v1\/(config|control\/[0-9a-f]{32})$/.test(String(args[0])) ? Promise.resolve(new Response('', { status: 404 })) : Reflect.apply(target, self, args),
 });
 const stub = vi.stubGlobal.bind(vi);
 vi.stubGlobal = ((name: string, value: unknown) => stub(name, name === 'fetch' && typeof value === 'function' ? quiet(value as never) : value)) as typeof vi.stubGlobal;
@@ -34,10 +34,12 @@ export async function settle(): Promise<void> {
   for (let n = 0; n < 30; n++) await Promise.resolve();
 }
 
-export function harness(storage: Storage = new MemoryStorage()) {
+export function harness(storage: Storage = new MemoryStorage(), extra: Partial<Platform> = {}) {
   const requests: { body: Uint8Array; gzip: boolean; keepalive: boolean; batch?: string | undefined }[] = [];
   const responses: (TransportResponse | Error)[] = [];
   let hidden = (): void => {};
+  let installed = 0;
+  let report: Parameters<NonNullable<Platform['errors']>>[0] = () => {};
   const screens: ((name: string) => void)[] = [];
   let id = 0;
   let development = false;
@@ -68,12 +70,16 @@ export function harness(storage: Storage = new MemoryStorage()) {
     development: () => development,
     onHidden: callback => { hidden = callback; },
     screens: callback => { screens.push(callback); },
+    errors: callback => { installed++; report = callback; },
   };
+  Object.assign(platform, extra);
   const client = createPulse(platform);
   return {
     client, platform, requests, responses, storage,
     hide: () => hidden(),
     screens,
+    get installed() { return installed; },
+    fail: (kind: 'crash' | 'error', value: unknown, sync?: boolean) => report(kind, value, sync),
     setDevelopment(value: boolean) { development = value; },
     async start(options: PulseOptions = {}) { client.init('synthetic-app-key', options); await settle(); },
     signals(index = 0): Signal[] {

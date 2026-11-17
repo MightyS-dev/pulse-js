@@ -15,6 +15,14 @@ export interface Usage {
   build: string;
   /** The running session: [start, last activity]. */
   cur?: [number, number];
+  /** Automatic signals queued today: [local day, count]. */
+  q?: [string, number];
+  /** Foregrounds today: [local day, count]. */
+  fg?: [string, number];
+  /** Seconds of the last foreground. */
+  fgp?: number;
+  /** The last notification permission seen. */
+  perm?: string;
 }
 
 export const localDay = (ms: number): string => {
@@ -23,6 +31,7 @@ export const localDay = (ms: number): string => {
 };
 
 const num = (v: unknown): boolean => Number.isFinite(v);
+const dayCount = (v: unknown): boolean => v === undefined || (Array.isArray(v) && typeof v[0] === 'string' && num(v[1]));
 const pair = (v: unknown): boolean => Array.isArray(v) && v.length === 2 && v.every(num);
 
 /** Reads a stored record; anything unexpected counts as no record. */
@@ -30,7 +39,7 @@ export function parseUsage(text: string | null): Usage | undefined {
   try {
     const u = JSON.parse(text ?? 'null') as Usage | null;
     if (u && typeof u.first === 'string' && num(u.total) && num(u.life) && Array.isArray(u.days) && Array.isArray(u.done)
-      && u.done.every(pair) && typeof u.ver === 'string' && typeof u.build === 'string' && (!u.cur || pair(u.cur))) return u;
+      && u.done.every(pair) && typeof u.ver === 'string' && typeof u.build === 'string' && (!u.cur || pair(u.cur)) && dayCount(u.q) && dayCount(u.fg)) return u;
   } catch { /* Unreadable: start over. */ }
 }
 
@@ -64,6 +73,8 @@ export function usageFields(u: Usage, at: number, started: number): Record<strin
     distinctDaysUsed: String(u.life),
     distinctDaysUsedLastMonth: String(u.days.length),
     sessionSeconds: String(Math.max(0, Math.round((at - started) / 1000))),
+    ...(u.fg?.[0] === localDay(at) ? { foregroundsToday: String(u.fg[1]) } : {}),
+    ...(u.fgp === undefined ? {} : { previousForegroundSeconds: String(u.fgp) }),
     ...(u.total === 1 ? { isNewInstall: 'true' } : {}),
     ...(u.prev === undefined ? {} : { previousSessionSeconds: String(u.prev) }),
     ...(seconds.length ? { averageSessionSeconds: String(Math.round(seconds.reduce((a, b) => a + b, 0) / seconds.length)) } : {}),

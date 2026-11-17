@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { link, mkdir, open, readdir, readFile, rename, unlink } from 'node:fs/promises';
 import { homedir, platform, release } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -49,15 +50,34 @@ function installFile(path: string): InstallStore {
 }
 
 /** A queue file plus a consent file. A consent file that exists but cannot be read is treated as opted out. */
-export function fileStorage(path: string, consentPath = `${path}.consent`, installPath = `${path}.install-id`, usagePath = `${path}.usage`, configPath = `${path}.config`): Storage {
+export function fileStorage(path: string, consentPath = `${path}.consent`, installPath = `${path}.install-id`, usagePath = `${path}.usage`, configPath = `${path}.config`,
+  controlPath = `${path}.control`, localPath = `${path}.control-local`): Storage {
   return resilientStorage({
     install: installFile(installPath),
     usage: { read: () => readText(usagePath), write: value => writeText(usagePath, value),
       remove: () => unlink(usagePath).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }) },
     config: { read: () => readText(configPath), write: value => writeText(configPath, value),
       remove: () => unlink(configPath).catch(error => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }) },
+    // The last App Control answer and what it remembers: two small files next to the install id. Nothing is ever removed with the analytics data.
+    control: () => ({ cache: { read: () => readText(controlPath), write: value => writeText(controlPath, value) }, local: { read: () => readText(localPath), write: value => writeText(localPath, value) } }),
     read: () => readText(path),
     write: value => writeText(path, value),
+    flushSync(value, early) {
+      const temporary = `${path}.${process.pid}.sync.tmp`;
+      if (early) {
+        // The file may hold signals from an earlier run that this one has not read: keep them, and write nothing over an opt-out.
+        let old: { optOut?: unknown; queue?: unknown; batches?: unknown } | undefined;
+        try { old = JSON.parse(readFileSync(path, 'utf8')); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return; }
+        if (old) {
+          if (old.optOut !== undefined && old.optOut !== false || !Array.isArray(old.queue)) return;
+          const mine = JSON.parse(value) as { queue: unknown[] };
+          value = JSON.stringify({ ...mine, queue: [...old.queue, ...mine.queue], batches: old.batches ?? [] });
+        }
+      }
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+      writeFileSync(temporary, value, { encoding: 'utf8', mode: 0o600 });
+      renameSync(temporary, path);
+    },
     consent: { read: () => readText(consentPath), write: value => writeText(consentPath, value) },
   });
 }
@@ -76,7 +96,8 @@ export function instanceStorage(directory: string, key: string, pid = process.pi
   const name = (): string => join(directory, `${key}.${pid}.${randomUUID()}.queue`);
   const pattern = /^([0-9a-f]{64})\.(\d+)\.[0-9a-f-]{36}\.queue$/;
   return {
-    ...fileStorage(name(), join(directory, `${key}.json`), join(directory, `install-id-${key.slice(0, 16)}`), join(directory, `usage-${key.slice(0, 16)}`), join(directory, `config-${key.slice(0, 16)}`)),
+    ...fileStorage(name(), join(directory, `${key}.json`), join(directory, `install-id-${key.slice(0, 16)}`), join(directory, `usage-${key.slice(0, 16)}`), join(directory, `config-${key.slice(0, 16)}`),
+      join(directory, `control-${key.slice(0, 16)}`), join(directory, `control-local-${key.slice(0, 16)}`)),
     async claim() {
       const values: string[] = [];
       const taken: string[] = [];
@@ -140,6 +161,17 @@ export function nodePlatform(): Platform {
     },
     transport: (appKey, host) => fetchTransport(appKey, host, () => globalThis.fetch),
     development: () => ['development', 'test'].includes(process.env.NODE_ENV ?? ''),
-    onHidden() { /* Node callers await flush before exiting. No process handlers are installed. */ },
+    onHidden() { /* Node callers await flush before exiting. */ },
+    launch: () => process.uptime() * 1000,
+    // 'uncaughtExceptionMonitor' observes a fatal error before Node decides what to do with it and changes nothing:
+    // listeners of the app still run, and without one Node prints the error and exits with its usual code. The queue is
+    // written synchronously, so a dying process loses nothing and the crash is sent at the next start. No
+    // 'uncaughtException' listener is added, because that would turn a crash into a survived error. A rejection that Node
+    // turns into an uncaught exception arrives here with origin 'unhandledRejection' (kind error). A 'unhandledRejection'
+    // listener is added only when the app already has one, which keeps Node's handling of rejections as it is.
+    errors(report) {
+      process.on('uncaughtExceptionMonitor', (error, origin) => report(origin === 'unhandledRejection' ? 'error' : 'crash', error, true));
+      if (process.listenerCount('unhandledRejection')) process.on('unhandledRejection', reason => report('error', reason));
+    },
   };
 }

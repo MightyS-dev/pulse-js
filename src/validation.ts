@@ -1,3 +1,4 @@
+import { validError } from './errors.js';
 import type { Signal, TrackOptions } from './types.js';
 
 export const encode = (value: string): Uint8Array => new TextEncoder().encode(value);
@@ -7,7 +8,8 @@ export const DAY = 86400000;
 const SYSTEM = ('platform osName osVersion locale appVersion appBuildNumber appName sdkName sdkVersion deviceModel deviceType architecture runtimeVersion '
   + 'isDebugBuild targetEnvironment screenWidth screenHeight screenScale screenWidthPx screenHeightPx orientation colorScheme layoutDirection '
   + 'timeZone utcOffsetMinutes language preferredLanguage region reduceMotion increaseContrast invertColors connectionType isNewInstall '
-  + 'firstSessionDate totalSessionsCount distinctDaysUsed distinctDaysUsedLastMonth previousSessionSeconds averageSessionSeconds sessionSeconds').split(' ');
+  + 'firstSessionDate totalSessionsCount distinctDaysUsed distinctDaysUsedLastMonth previousSessionSeconds averageSessionSeconds sessionSeconds '
+  + 'foregroundsToday previousForegroundSeconds notificationPermission launchMs droppedAutomatic').split(' ');
 /** Replaces lone surrogates with U+FFFD, as String.prototype.toWellFormed does, without requiring ES2024. */
 export const wellFormed = (value: string): string =>
   value.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, m => m[1] ? m : '�');
@@ -41,9 +43,13 @@ export function validStored(input: unknown, now: number, age: number): input is 
     const text = (v: unknown): v is string => typeof v === 'string' && v.length <= 512;
     // Rebuild the record exactly as this SDK writes it; any extra, missing, reordered or retyped field differs.
     return text(sessionId) && !!sessionId && timestamp.endsWith('Z') && time >= now - age * DAY && time <= now + 3600000 &&
-      (userHash === undefined || /^[a-f0-9]{64}$/.test(userHash)) && Object.values(system).every(text) &&
+      (userHash === undefined || /^[a-f0-9]{64}$/.test(userHash)) && (s.error === undefined || validError(s.error)) && (s.heatmap === undefined || validHeatmap(s.heatmap)) && Object.values(system).every(text) &&
       SYSTEM.slice(0, 5).concat(SYSTEM.slice(7, 9)).every(k => k in system) && Object.keys(system).every(k => SYSTEM.includes(k)) &&
-      JSON.stringify(s) === JSON.stringify({ ...normalize(s.type, s), timestamp, sessionId, ...(userHash === undefined ? {} : { userHash: '' + userHash }),
+      JSON.stringify(s) === JSON.stringify({ ...normalize(s.type, s), error: s.error, heatmap: s.heatmap, timestamp, sessionId, ...(userHash === undefined ? {} : { userHash: '' + userHash }),
         debug: s.debug === true, system });
   } catch { return false; }
 }
+
+/** A stored heatmap object: the bounds of the contract. */
+const validHeatmap = (h: NonNullable<Signal['heatmap']>): boolean => h.screen.length <= 128 && h.points.length > 0 && h.points.length <= 200
+  && h.points.every(p => p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 100000 && ['tap', 'rage', 'dead'].includes(p.kind));

@@ -1,3 +1,6 @@
+import { routeName } from './route.js';
+import { startOverlay } from './overlay-token.js';
+import { watchTaps } from './taps.js';
 import { fetchTransport, realClock, resilientStorage } from './shared.js';
 import type { Platform, Storage, SystemInfo } from '../types.js';
 
@@ -127,9 +130,12 @@ export function browserStorage(appKey: string): Storage {
     write: async (value: string) => { local().setItem(name, value); },
     remove: async () => { local().removeItem(name); },
   });
+  // Neither App Control record holds an identifier, so a normal browser keeps them too.
+  const control = (id: string) => ({ cache: item(`mightys-pulse:control:${id.slice(0, 16)}`), local: item(`mightys-pulse:control-local:${id.slice(0, 16)}`) });
   return resilientStorage({
     // Only inside an app wrapper does the page's storage belong to the app; a normal browser stores no identifier.
     ...(inWrapper() ? { install: item(key), usage: item(usage), config: item(config) } : {}),
+    control,
     // A new page never has a record yet; earlier pages' records are adopted through claim.
     read: async () => null,
     async write(value) {
@@ -166,14 +172,9 @@ export function browserStorage(appKey: string): Storage {
   });
 }
 
-const watched = new WeakMap<object, Set<(name: string) => void>>();
-const ID = /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32})$/i;
+export { routeName };
 
-/** A route as a screen name: the path only (the hash path for hash routers), numeric and uuid-like segments as `:id`. */
-export function routeName(pathname: string, hash = ''): string {
-  const path = (/^#!?\//.test(hash) ? hash.replace(/^#!?/, '') : pathname).split(/[?#]/)[0] ?? '';
-  return path.split('/').map(part => ID.test(part) ? ':id' : part).join('/').slice(0, 128) || '/';
-}
+const watched = new WeakMap<object, Set<(name: string) => void>>();
 
 /** Reports the current route and every later change. The History API is wrapped once, however many clients ask. */
 export function watchScreens(win: Record<string, any>, callback: (name: string) => void): void {
@@ -197,7 +198,14 @@ export function watchScreens(win: Record<string, any>, callback: (name: string) 
   callback(routeName(win.location.pathname, win.location.hash));
 }
 
+/** How far down the page the reader has been: the bottom of the window as a share of the page height, 0 to 100. */
+const reached = (): number => {
+  try { const h = document.documentElement.scrollHeight; return h > 0 ? Math.min(100, Math.round((scrollY + innerHeight) / h * 100)) : 0; } catch { return 0; }
+};
+
 export function browserPlatform(): Platform {
+  let top = reached();
+  globalThis.addEventListener?.('scroll', () => { top = Math.max(top, reached()); }, { passive: true });
   return {
     clock: realClock,
     environment: {
@@ -219,6 +227,27 @@ export function browserPlatform(): Platform {
     development: developmentBuild,
     automated: () => automatedBrowser(globalThis.navigator, inWrapper()),
     screens: callback => watchScreens(globalThis, callback),
+    lifecycle(callback) {
+      if (typeof document === 'undefined') return true;
+      document.addEventListener('visibilitychange', () => callback(document.visibilityState !== 'hidden'));
+      return document.visibilityState !== 'hidden';
+    },
+    wrapped: () => inWrapper(),
+    scroll() { const value = top; top = reached(); return value; },
+    campaign: () => new URLSearchParams(globalThis.location?.search),
+    // A status read: the permission prompt is never requested.
+    permission: () => inWrapper() ? { default: 'notDetermined', granted: 'granted', denied: 'denied' }[globalThis.Notification?.permission as string] : undefined,
+    launch: () => inWrapper() ? performance.now() : undefined,
+    heatmap: (ready, report) => watchTaps(globalThis, ready, report),
+    overlay: host => { if (!inWrapper()) startOverlay(globalThis, host); },
+    // Listeners only: window.onerror and other listeners keep running, nothing is prevented or replaced.
+    errors(report) {
+      globalThis.addEventListener?.('error', event => {
+        const e = event as ErrorEvent;
+        report('error', e.error ?? { name: 'Error', message: e.message, stack: e.filename && `@${e.filename}:${e.lineno}:${e.colno}` });
+      });
+      globalThis.addEventListener?.('unhandledrejection', event => report('error', (event as PromiseRejectionEvent).reason));
+    },
     onHidden(callback) {
       if (typeof document === 'undefined') return;
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') callback(); });

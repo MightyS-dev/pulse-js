@@ -1,14 +1,19 @@
 import { defaults, identity } from './config.js';
+import { createControl } from './control-main.js';
 import { batchFrom, restoreBatches, saveState } from './batch.js';
 import type { Batch } from './batch.js';
+import { describeError } from './errors.js';
+import type { ErrorInfo, ErrorKind } from './errors.js';
+import { Heat } from './heatmap.js';
 import { ALL_ON, parseRemote } from './remote.js';
 import { ServerPolicy } from './server-policy.js';
-import { beginSession, parseUsage, usageFields } from './usage.js';
+import { ADDED, AUTOMATIC, CAPS, DAILY, deepLinkProps, OPT_IN, utm } from './signals.js';
+import { beginSession, localDay, parseUsage, usageFields } from './usage.js';
 import type { Usage } from './usage.js';
 import { DAY, normalize, size, validStored, wellFormed } from './validation.js';
-import type { Platform, PulseClient, PulseOptions, Signal, Storage, SystemInfo, TrackOptions, Transport } from './types.js';
+import type { HeatmapInfo, HeatTap, Platform, PulseClient, PulseOptions, Signal, Storage, SystemInfo, TrackOptions, Transport } from './types.js';
 
-type Draft = Pick<Signal, 'timestamp' | 'sessionId' | 'type' | 'props' | 'value' | 'userHash'>;
+type Draft = Pick<Signal, 'timestamp' | 'sessionId' | 'type' | 'props' | 'value' | 'userHash' | 'error' | 'heatmap'> & { sys?: Record<string, string> };
 
 // Debug warnings are few and generic: they never contain submitted data, and short texts keep the bundle small.
 const STORAGE = 'Storage unavailable.';
@@ -76,6 +81,21 @@ export function createPulse(platform: Platform): PulseClient {
   let starts: [number, string][] = [];
   let lastScreen = '';
   let remote = ALL_ON;
+  // Error signals sent in the current session, per error type (memory only).
+  const sent = new Map<string, number>();
+  // Automatic signals queued in a session, per session and type (memory only), and those dropped by a limit since the last signal.
+  const counts = new Map<string, number>();
+  let dropped = 0;
+  // Visible time of the current screen: `seen` closed spans plus the open one since `since`.
+  let visible = true;
+  let seen = 0;
+  let since = clock.now();
+  let foreground: number | undefined;
+  let owed = 0;
+  let cold = true;
+  let landing: Record<string, string> = {};
+  const heat = new Heat();
+  const control = createControl(platform);
 
   const warn = (message: string): void => {
     try { if (options.debug) env.warn(message); } catch { /* Logging cannot affect the application. */ }
@@ -84,7 +104,12 @@ export function createPulse(platform: Platform): PulseClient {
     try { action(); } catch { warn(FAILED); }
   };
   // A signal type the portal has not switched off; automatic signals also need the portal's automatic switch.
-  const allowed = (type: string): boolean => remote.automatic && !remote.off.includes(type);
+  const allowed = (type: string): boolean => remote.automatic && !remote.off.includes(type) && !remote.paused.includes(type)
+    && (!OPT_IN.includes(type) || remote.enabled.includes(type));
+  // Heatmaps need the portal's switch, the code option and the automatic switches; the signal also needs screen views allowed.
+  const heatAllowed = (): boolean => options.captureHeatmaps && options.automaticSignals && remote.heatmaps && allowed('pulse.heatmap');
+  const heatOn = (): boolean => initialized && !disabled && !blocked && heatAllowed() && allowed('pulse.screen_view') && !!lastScreen;
+  const app = (): boolean => platform.wrapped?.() === true;
   const interval = (): number => (policy.intervalSeconds ?? options.flushIntervalSeconds) * 1000;
   const drop = (signals: Signal[]): void => { queue = queue.filter(s => !signals.includes(s)); };
   // Queue records carry the opt-out flag too, for storages without a separate consent record.
@@ -158,7 +183,9 @@ export function createPulse(platform: Platform): PulseClient {
     const extra: Record<string, string> = {};
     for (const [key, value] of Object.entries(info)) if (typeof value === 'string' && value) extra[key] = value.slice(0, 64);
     // Statistics, app name and build exist only where something is stored for the app (Node, native app wrappers).
+    const perm = storage?.usage ? platform.permission?.() : undefined;
     const full = storage?.usage ? {
+      ...(perm ? { notificationPermission: perm } : {}),
       ...(usage ? usageFields(usage, reading, sessionStart) : {}),
       ...(options.appBuildNumber ? { appBuildNumber: options.appBuildNumber } : {}),
       ...(options.appName ? { appName: options.appName } : {}),
@@ -166,13 +193,16 @@ export function createPulse(platform: Platform): PulseClient {
     // Fields of a group the portal switched off are left out; the base keys below never are.
     Object.assign(extra, full);
     remote.hidden.forEach(key => { delete extra[key]; });
+    const { sys, ...rest } = draft;
+    const lost = dropped;
+    dropped = 0;
     return {
-      ...draft,
+      ...rest,
       timestamp: stamp(reading),
       ...(hash === undefined ? {} : { userHash: hash }),
       debug: options.debug,
       system: {
-        ...extra,
+        ...extra, ...sys, ...lost ? { droppedAutomatic: String(lost) } : {},
         platform: clean(info.platform), osName: clean(info.osName), osVersion: clean(info.osVersion),
         locale: clean(info.locale), appVersion: options.appVersion,
         ...(info.deviceModel ? { deviceModel: clean(info.deviceModel) } : {}),
@@ -183,31 +213,75 @@ export function createPulse(platform: Platform): PulseClient {
 
   /** Turns drafts into queued signals. Screen views are judged here, once the cached settings are known, never at capture time. */
   function admit(drafts: Draft[]): Signal[] {
-    return drafts.filter(d => d.type !== 'pulse.screen_view' || allowed(d.type)).map(materialize);
+    const judged = (d: Draft): boolean => (d.type !== 'pulse.screen_view' || allowed(d.type)) && (d.type !== 'pulse.heatmap' || heatAllowed()) && (!ADDED.includes(d.type) || options.automaticSignals && allowed(d.type));
+    return drafts.filter(d => judged(d) && (quota(d) || !++dropped)).map(materialize);
   }
 
-  function track(type: string, input?: TrackOptions): void {
+  /** The per-session and per-day limits of automatic signals. The daily count needs the install's stored statistics. */
+  function quota(d: Draft): boolean {
+    if (!AUTOMATIC.includes(d.type)) return true;
+    const key = `${d.sessionId}|${d.type}`;
+    const cap = CAPS[d.type];
+    if (cap !== undefined && (counts.get(key) ?? 0) >= cap) return false;
+    if (usage) {
+      const day = localDay(Date.parse(d.timestamp));
+      const used = usage.q?.[0] === day ? usage.q[1] : 0;
+      if (used >= DAILY) return false;
+      usage = { ...usage, q: [day, used + 1] };
+    }
+    if (cap !== undefined) {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return true;
+  }
+
+  const idle = (now: number): boolean => !session || Math.abs(now - lastActivity) >= 1800000;
+
+  function track(type: string, input?: TrackOptions, error?: ErrorInfo, heatmap?: HeatmapInfo, at?: number): void {
     protect(() => {
       if (disabled || blocked) return;
       const fields = normalize(type, input, () => warn(DISCARDED));
       if (!fields) { warn(DISCARDED); return; }
-      const now = clock.now();
+      const now = at ?? clock.now();
       // Idle is measured from the previous captured signal; a clock that moved back by that much also ends the session.
-      const begins = !session || Math.abs(now - lastActivity) >= 1800000;
-      if (begins) session = env.sessionId();
-      lastActivity = now;
+      const begins = idle(now);
+      if (begins) { session = env.sessionId(); counts.clear(); }
+      lastActivity = at === undefined ? now : Math.max(lastActivity, now);
       // Session statistics wait for the stored record; sessions begun before it is read start in order afterwards.
       let first: Draft[] = [];
       if (begins && usageLoaded) first = startSession(now, session);
       else if (begins && (!hydrated || installing)) starts.push([now, session]);
+      const changed = usageLoaded && usage ? permissionChange(now) : [];
       if (usageLoaded && usage && !begins) {
         usage = { ...usage, cur: [usage.cur?.[0] ?? now, now] };
         if (now - usageSaved > 15000) saveUsage();
       }
-      add(...first, {
-        ...fields, timestamp: new Date(now).toISOString(), sessionId: session,
+      add(...first, ...changed, {
+        ...fields, ...(error ? { error } : {}), ...(heatmap ? { heatmap } : {}), timestamp: new Date(now).toISOString(), sessionId: session,
         ...(userHash === undefined ? {} : { userHash }),
       });
+    });
+  }
+
+  /** An error as a normal `pulse.error` signal: at most 10 per session per type; nothing here can throw. */
+  function capture(kind: ErrorKind, value: unknown, props?: TrackOptions['props'], sync = false): void {
+    protect(() => {
+      if (disabled || blocked) return;
+      const error = describeError(kind, value, options.errorDetail);
+      if (idle(clock.now())) sent.clear();
+      const count = sent.get(error.type) ?? 0;
+      if (count > 9) return;
+      sent.set(error.type, count + 1);
+      track('pulse.error', { props: props as never }, error);
+      // A process that is about to end keeps the queue on disk (before the queue has loaded, only the signals waiting in memory are written).
+      if (sync && !disabled) {
+        if (hydrated) storage?.flushSync?.(envelope(saveState(work, queue)));
+        else if (storage?.flushSync) {
+          // The queue is not loaded yet: keep what is waiting in memory in a record marked early. The stored choice is
+          // read first at the next start and drops it when the user is opted out.
+          storage.flushSync(envelope({ early: true, ...saveState([], admit(pending)) }), true);
+        }
+      }
     });
   }
 
@@ -233,7 +307,11 @@ export function createPulse(platform: Platform): PulseClient {
     try {
       const response = await transport.config(remote.version);
       const parsed = parseRemote(response.body);
-      if (parsed && !disabled) { if (storage?.config) await storage.config.write(response.body!); else remote = parsed; }
+      if (parsed && !disabled) {
+        if (storage?.config) { await storage.config.write(response.body!); remote = { ...remote, heatmaps: parsed.heatmaps }; } else remote = parsed;
+        // Switched off: capture stops at once and the buffer goes.
+        if (!heatAllowed()) heat.reset();
+      }
     } catch { /* The cache or the all-on default stays. */ }
   }
 
@@ -244,14 +322,60 @@ export function createPulse(platform: Platform): PulseClient {
     const next = beginSession(usage, now, keep ? usage!.ver : options.appVersion, keep ? usage!.build : options.appBuildNumber);
     usage = next.usage;
     sessionStart = now;
-    const make = (type: string, props: Draft['props'] = {}): Draft => ({
-      type, props, timestamp: new Date(now).toISOString(), sessionId: id, ...(userHash === undefined ? {} : { userHash }),
+    const make = (type: string, props: Draft['props'] = {}, sys?: Draft['sys']): Draft => ({
+      type, props, ...(sys ? { sys } : {}), timestamp: new Date(now).toISOString(), sessionId: id, ...(userHash === undefined ? {} : { userHash }),
     });
-    const out = [...fresh ? [make('pulse.new_install')] : [], ...next.changed ? [make('pulse.app_updated', { previousVersion: next.changed[0], previousBuild: next.changed[1] })] : [], make('pulse.session_started')]
+    // Launch time belongs to the first session of this process or page load only.
+    const ms = cold ? platform.launch?.() : undefined;
+    cold = false;
+    credit(now);
+    const launch = ms !== undefined && Number.isFinite(ms) && ms >= 0 ? { launchMs: String(Math.round(ms)) } : undefined;
+    const out = [...fresh ? [make('pulse.new_install')] : [], ...next.changed ? [make('pulse.app_updated', { previousVersion: next.changed[0], previousBuild: next.changed[1] })] : [], make('pulse.session_started', {}, launch)]
       .filter(d => options.automaticSignals && allowed(d.type));
     saveUsage();
     fresh = false;
     return out;
+  }
+
+  /** Books foregrounds that began before the statistics were loaded onto today's count. */
+  function credit(now: number): void {
+    if (!usage || !owed) return;
+    const day = localDay(now);
+    usage = { ...usage, fg: [day, (usage.fg?.[0] === day ? usage.fg[1] : 0) + owed] };
+    owed = 0;
+  }
+
+  /** `pulse.permission_changed` once, on the first signal after the stored notification permission differs. */
+  function permissionChange(now: number): Draft[] {
+    const to = platform.permission?.();
+    const from = usage?.perm;
+    if (!usage || !to || to === from) return [];
+    usage = { ...usage, perm: to };
+    saveUsage();
+    return from ? [{ type: 'pulse.permission_changed', props: { permission: 'notification', from, to }, timestamp: new Date(now).toISOString(), sessionId: session,
+      ...(userHash === undefined ? {} : { userHash }) }] : [];
+  }
+
+  /** The page or app became visible or hidden: closes or opens the screen's visible time and, in a wrapper, the foreground. */
+  function opened(now: number, start: boolean): void {
+    foreground = now;
+    owed++;
+    credit(now);
+    track('pulse.app_opened', { props: { coldStart: String(start) } });
+  }
+
+  function visibility(now: number, shown: boolean): void {
+    if (shown === visible) return;
+    if (shown) { since = now; control.foreground(); } else seen += now - since;
+    visible = shown;
+    if (!app()) return;
+    if (shown) return opened(now, false);
+    const seconds = Math.round((now - (foreground ?? now)) / 1000);
+    if (foreground === undefined) return;
+    foreground = undefined;
+    if (usage) { usage = { ...usage, fgp: seconds }; saveUsage(); }
+    // A background event never opens a session of its own.
+    if (!idle(now)) track('pulse.app_backgrounded', { props: { foregroundSeconds: seconds } });
   }
 
   /** Writes the statistics file one write after another. A failure keeps the in-memory statistics. */
@@ -271,6 +395,7 @@ export function createPulse(platform: Platform): PulseClient {
     usage = undefined;
     try { usage = parseUsage(await store.read()); } catch { warn(STORAGE); }
     usageLoaded = true;
+    credit(clock.now());
   }
 
   function removeUsage(): Promise<void> {
@@ -438,6 +563,19 @@ export function createPulse(platform: Platform): PulseClient {
     return serial(async () => { try { await storage?.install?.remove(); } catch { warn(STORAGE); } });
   }
 
+  const sendHeat = (info: HeatmapInfo, at: number): void => track('pulse.heatmap', undefined, undefined, info, at);
+  const closeHeat = (): void => protect(() => heat.close(sendHeat));
+  /** A tap that passed the platform's privacy rules. Returns a function that turns it into a dead click. */
+  function tapped(tap: HeatTap): (() => void) | undefined {
+    try {
+      if (!heatOn()) return;
+      const now = clock.now();
+      if (idle(now) && !heat.buffer) heat.total = 0;
+      const point = heat.add(lastScreen, tap, now, sendHeat);
+      return point?.kind === 'tap' ? () => { if (point.kind === 'tap' && heat.has(point)) point.kind = 'dead'; } : undefined;
+    } catch { warn(FAILED); }
+  }
+
   function installHook(): void {
     if (options.automaticScreenViews && allowed('pulse.screen_view')) protect(() => platform.screens?.(screen));
   }
@@ -461,6 +599,9 @@ export function createPulse(platform: Platform): PulseClient {
         gzip: input.gzip !== false,
         automaticScreenViews: input.automaticScreenViews !== false,
         automaticSignals: input.automaticSignals !== false,
+        captureErrors: input.captureErrors !== false,
+        errorDetail: input.errorDetail === 'typeOnly' ? 'typeOnly' : 'full',
+        captureHeatmaps: input.captureHeatmaps !== false,
         debug: typeof input.debug === 'boolean' ? input.debug : platform.development(),
         appVersion: typeof input.appVersion === 'string' ? wellFormed(input.appVersion.slice(0, 512)) : '',
         appBuildNumber: typeof input.appBuildNumber === 'string' ? wellFormed(input.appBuildNumber.slice(0, 64)) : '',
@@ -471,6 +612,7 @@ export function createPulse(platform: Platform): PulseClient {
       const store = storage = platform.storage(appKey, input);
       transport = platform.transport(appKey, options.host);
       initialized = true;
+      protect(() => control.start(appKey, input.control, options, store, transport!));
       nextSend = clock.now() + interval();
       ready = (async () => {
         let consent: string | null = null;
@@ -517,8 +659,19 @@ export function createPulse(platform: Platform): PulseClient {
       })().catch(() => warn(FAILED));
       // Opt-out in another tab applies here at once; only an explicit optOut(false) enables collection again.
       protect(() => store.watch?.(record => { if (record !== null) protect(() => consent(optedOut(record, true), false)); }));
-      protect(() => platform.onHidden(() => { void flush(true); }));
+      protect(() => {
+        landing = utm(platform.campaign?.());
+        const shown = platform.lifecycle?.(on => protect(() => visibility(clock.now(), on)));
+        if (shown === undefined) return;
+        visible = shown;
+        since = clock.now();
+        if (shown && app()) opened(since, true);
+      });
+      protect(() => platform.onHidden(() => { closeHeat(); void flush(true); }));
+      protect(() => platform.heatmap?.(heatOn, tapped));
+      protect(() => platform.overlay?.(options.host));
       if (!store.config) installHook();
+      if (options.captureErrors) protect(() => platform.errors?.((kind, value, sync) => capture(kind, value, undefined, sync)));
     });
   }
 
@@ -538,6 +691,7 @@ export function createPulse(platform: Platform): PulseClient {
       userHash = undefined;
       ++userGeneration;
       pending = []; queue = []; work = [];
+      heat.reset();
       protect(() => transport?.cancel());
       void removeInstall();
       void removeUsage();
@@ -571,11 +725,23 @@ export function createPulse(platform: Platform): PulseClient {
       const clean = wellFormed(name).slice(0, 128);
       // The same screen again, with no other screen in between, is not a new appearance.
       if (!clean.trim() || clean === lastScreen) return;
+      closeHeat();
       const previous = lastScreen;
       lastScreen = clean;
-      track('pulse.screen_view', { props: { screen: clean, ...(previous ? { previousScreen: previous } : {}) } });
+      const now = clock.now();
+      const seconds = Math.round((seen + (visible ? now - since : 0)) / 1000);
+      seen = 0;
+      since = now;
+      const scroll = previous ? platform.scroll?.() : undefined;
+      track('pulse.screen_view', { props: { screen: clean, ...(previous ? { previousScreen: previous, previousScreenSeconds: seconds } : {}),
+        ...(scroll === undefined || !Number.isFinite(scroll) ? {} : { previousScrollPercent: Math.min(100, Math.max(0, Math.round(scroll))) }), ...landing } });
+      landing = {};
     });
   }
 
-  return { init, track, setUser, flush: () => flush(), optOut, screen };
+  function deepLink(url: string): void {
+    protect(() => { if (!disabled && typeof url === 'string' && app()) track('pulse.deep_link', { props: deepLinkProps(url) }); });
+  }
+
+  return { init, deepLink, control: control.api, track: (type, input) => track(type, input), setUser, flush: () => { closeHeat(); return flush(); }, optOut, screen, trackError: (error, props) => capture('handled', error, props) };
 }
