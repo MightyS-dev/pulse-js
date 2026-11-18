@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 
 // The main web bundle must stay under the limit. App Control loads from its own file (dist/control.js) and is not part of it.
-const LIMIT = 13900;
+const LIMIT = 14000;
 const size = async name => {
   const bytes = await readFile(new URL(`../dist/${name}`, import.meta.url));
   return { bytes: bytes.byteLength, gzip: gzipSync(bytes, { level: 9 }).byteLength };

@@ -4,9 +4,9 @@ import { scrub } from './errors.js';
 export const AUTOMATIC = ['pulse.session_started', 'pulse.new_install', 'pulse.app_updated', 'pulse.screen_view', 'pulse.app_opened',
   'pulse.app_backgrounded', 'pulse.deep_link', 'pulse.permission_changed'];
 /** Automatic types that the portal must list in `enabledSignals` before they are sent. */
-export const OPT_IN = ['pulse.app_opened', 'pulse.app_backgrounded'];
+export const OPT_IN = ['pulse.app_opened'];
 /** Automatic types that were added with the portal switches; they are judged when they are queued. */
-export const ADDED = [...OPT_IN, 'pulse.deep_link', 'pulse.permission_changed'];
+export const ADDED = [...OPT_IN, 'pulse.app_backgrounded', 'pulse.deep_link', 'pulse.permission_changed'];
 /** The most automatic signals of a type in one session. */
 export const CAPS: Record<string, number> = {
   'pulse.app_opened': 20, 'pulse.app_backgrounded': 20, 'pulse.deep_link': 10, 'pulse.permission_changed': 5, 'pulse.screen_view': 100,

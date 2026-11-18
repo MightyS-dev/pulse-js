@@ -14,8 +14,9 @@ export interface PulseOptions {
    */
   automaticScreenViews?: boolean;
   /**
-   * Node and native app wrappers: sends `pulse.session_started`, `pulse.new_install` and `pulse.app_updated`. Default
-   * true. The portal can switch these off too; this option can only switch them off, never force them on.
+   * Browser and native app wrappers: sends `pulse.app_backgrounded` on hide. Node and native app wrappers also send
+   * `pulse.session_started`, `pulse.new_install` and `pulse.app_updated`. Default true. The portal can switch these
+   * off too; this option can only switch them off, never force them on.
    */
   automaticSignals?: boolean;
   /**

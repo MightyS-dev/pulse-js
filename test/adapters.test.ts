@@ -90,6 +90,34 @@ describe('browser adapter', () => {
     expect(h.requests).toHaveLength(0); expect(JSON.parse([...h.values.values()][0]!).optOut).toBe(true);
   });
 
+  it.each(['visibility first', 'pagehide first', 'pagehide only'])('sends one background with session seconds and keepalive: %s', async order => {
+    vi.useFakeTimers({ now: Date.UTC(2026, 10, 18, 12), toFake: ['Date'] });
+    const h = browser(); h.client.init('synthetic-key', { gzip: false }); h.client.track('start'); await h.client.flush();
+    const hidden = (): void => {
+      Object.defineProperty(h.doc, 'visibilityState', { value: 'hidden', writable: true });
+      h.doc.dispatchEvent(new Event('visibilitychange'));
+    };
+    vi.setSystemTime(Date.now() + 60000);
+    if (order === 'visibility first') hidden();
+    h.page.dispatchEvent(new Event('pagehide'));
+    if (order === 'pagehide first') hidden();
+    await settle();
+    const all = h.requests.flatMap(r => JSON.parse(new TextDecoder().decode(r.init.body as Uint8Array)) as Signal[]);
+    expect(all.filter(s => s.type === 'pulse.app_backgrounded')).toMatchObject([
+      { props: { foregroundSeconds: 60 }, system: { sessionSeconds: '60' } },
+    ]);
+    expect(h.requests.at(-1)!.init.keepalive).toBe(true);
+    expect(h.requests).toHaveLength(2);
+    // A page restored from the back/forward cache can report its next hide once.
+    Object.defineProperty(h.doc, 'visibilityState', { value: 'visible', writable: true });
+    h.page.dispatchEvent(new Event('pageshow'));
+    vi.setSystemTime(Date.now() + 10000); h.page.dispatchEvent(new Event('pagehide')); await settle();
+    const again = h.requests.flatMap(r => JSON.parse(new TextDecoder().decode(r.init.body as Uint8Array)) as Signal[]);
+    expect(again.filter(s => s.type === 'pulse.app_backgrounded')).toHaveLength(2);
+    expect(again.at(-1)!.props.foregroundSeconds).toBe(10);
+    expect(again.at(-1)!.system.sessionSeconds).toBe('70');
+  });
+
   it('hashes UTF-8 user IDs with WebCrypto and compresses using CompressionStream', async () => {
     const h = browser(); h.client.init('synthetic-key'); await h.client.setUser('private-č😀');
     h.client.track('compressed', { props: { content: 'x'.repeat(4000) } }); await h.client.flush();
@@ -203,9 +231,9 @@ describe('browser tabs', () => {
     expect([...t.values.values()].find(v => v.includes('orphan'))).toMatch(/^0 /);
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { t.requests.push({ url, init }); return new Response('', { status: 202 }); }));
     const b = t.open(); const c = t.open(); await b.client.flush(); await c.client.flush();
-    expect(t.sent()).toEqual(['orphan']); expect(t.queues()).toEqual([]);
+    expect(t.sent()).toEqual(['orphan', 'pulse.app_backgrounded']); expect(t.queues()).toEqual([]);
     // The old page learns at its next write that its record was adopted and keeps only the newer signal.
-    a.client.track('late'); await settle(); expect(t.queues()).toEqual([['late']]); expect(t.sent()).toEqual(['orphan']);
+    a.client.track('late'); await settle(); expect(t.queues()).toEqual([['late']]); expect(t.sent()).toEqual(['orphan', 'pulse.app_backgrounded']);
   });
 
   it('leaves back/forward-cached and live pages alone until their two-hour lease lapses', async () => {
@@ -216,7 +244,7 @@ describe('browser tabs', () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { t.requests.push({ url, init }); return new Response('', { status: 202 }); }));
     const b = t.open(); await b.client.flush(); expect(t.requests).toHaveLength(0);
     vi.setSystemTime(Date.now() + LEASE);
-    const c = t.open(); await c.client.flush(); expect(t.sent()).toEqual(['cached']);
+    const c = t.open(); await c.client.flush(); expect(t.sent()).toEqual(['cached', 'pulse.app_backgrounded']);
   });
 
   it('retries a failed localStorage write on the next write instead of disabling persistence', async () => {

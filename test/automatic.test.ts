@@ -112,7 +112,7 @@ describe('screen time, scroll and campaign', () => {
 });
 
 describe('wrapper lifecycle', () => {
-  it('opt-in events are not sent without enabledSignals or without a cached config', async () => {
+  it('app_opened is not sent without enabledSignals or without a cached config', async () => {
     for (const config of [undefined, cfg(), cfg({ enabledSignals: ['pulse.app_opened'], disabledSignals: ['pulse.app_opened'] })]) {
       const p = page(); const { h } = await open(p, {}, config);
       p.set(false); p.set(true);
@@ -290,6 +290,8 @@ describe('quota guards', () => {
     for (let n = 0; n < 110; n++) h.client.screen(`/s${n}`);
     for (let n = 0; n < 25; n++) { p.set(false); p.set(true); }
     for (let n = 0; n < 8; n++) { p.state.permission = n % 2 ? 'granted' : 'denied'; h.client.track('x'); }
+    // Finish the hide's single keepalive attempt before draining the rest of this large queue.
+    await h.client.flush();
     const all = await sent(h);
     expect(of(all, 'pulse.screen_view')).toHaveLength(100);
     expect(of(all, 'pulse.app_opened')).toHaveLength(20);

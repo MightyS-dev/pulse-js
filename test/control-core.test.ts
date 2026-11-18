@@ -281,7 +281,7 @@ describe('switched off from the server (group 5)', () => {
   });
 
   it('this SDK in disabledSdkVersions clears it too', async () => {
-    expect(await down({ ...REQUIRED(), version: 2, disabledSdkVersions: ['pulse-js@0.9.7'] })).toEqual(['updateRequired', 'normal']);
+    expect(await down({ ...REQUIRED(), version: 2, disabledSdkVersions: ['pulse-js@0.9.8'] })).toEqual(['updateRequired', 'normal']);
   });
 
   it('another SDK or another version in the list changes nothing', async () => {

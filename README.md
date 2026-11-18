@@ -43,6 +43,13 @@ Nothing else is needed to count users in Node.js and in web apps shipped inside 
 
 Public calls do not throw and their promises do not reject. Signals tracked before `init` are kept (the newest 100) and sent afterwards. Only the first `init` call has an effect. No page, click or navigation signals are created automatically.
 
+## See your first signal
+
+1. Sign in at [app.pulse.mightys.dev](https://app.pulse.mightys.dev) and open the app whose key you used.
+2. A debug or development build sends test data (see Test mode below). Turn on the **Test mode** switch in the bar
+   above the figures to see it; turn it off again for real users.
+3. Open **Live** in the app menu: signals appear there as they arrive. The Overview and the other screens follow shortly.
+
 ## What is sent and what is never sent
 
 Sent with every signal: your signal name, optional number and properties, a UTC timestamp, the debug flag, a random session id, the platform (`web`, `node` or `mobile`), coarse OS name and version when available, locale, your configured app version, and the SDK name and version. What else is sent depends on where the code runs. A field the platform cannot give is left out. In a browser, the SDK sends nothing from crawlers and automated browsers.
@@ -88,7 +95,7 @@ Do not put personal data in signal names, properties or app versions: they are s
 | `captureErrors` | `true` | Browser, native app wrappers and Node.js: sends unhandled errors, rejections and crashes as `pulse.error`. `false` installs nothing; `Pulse.trackError` still works. See Errors and crashes below. |
 | `captureHeatmaps` | `true` | Browser and native app wrappers: `true` follows the portal (heatmaps are off until it switches them on); `false` never captures taps. See Heatmaps below. |
 | `errorDetail` | `'full'` | `'full'` sends the error type, a filtered message and frames. `'typeOnly'` sends only the kind and the type. |
-| `automaticSignals` | `true` | Node and native app wrappers: sends `pulse.session_started`, `pulse.new_install` and `pulse.app_updated`, and in native app wrappers the app events, deep links and permission changes of Automatic signals. It can only switch them off; see Settings from the portal below. |
+| `automaticSignals` | `true` | Browser and native app wrappers: sends `pulse.app_backgrounded` on hide. Node and native app wrappers also send `pulse.session_started`, `pulse.new_install` and `pulse.app_updated`; native app wrappers also have app opens, deep links and permission changes. It can only switch them off; see Settings from the portal below. |
 | `control` | `'automatic'` | `'automatic'` checks App Control and shows the built-in screens. `'manual'` checks and keeps `Pulse.control` up to date but draws nothing. `'off'` makes no request at all. See App Control below. |
 | `debug` | development builds: `true`; otherwise `false` | Marks signals as test data and enables warnings, which never contain signal or user data. See Test mode below. |
 | `appVersion` | `''` | String of at most 512 UTF-16 code units. |
@@ -102,17 +109,22 @@ Invalid numeric and boolean values fall back to their defaults.
 
 What the SDK sends on its own, and how to switch each part off. Defaults and the signal cost of every type are in the [automatic signals table](https://pulse.mightys.dev/docs/automatic-signals/).
 
-| Signal | Where | Switch off |
-| --- | --- | --- |
-| `pulse.session_started`, `pulse.new_install`, `pulse.app_updated` | Node.js, native app wrappers | `automaticSignals: false` |
-| `pulse.screen_view` | browser, native app wrappers (Node: `Pulse.screen`) | `automaticScreenViews: false` |
-| `pulse.app_opened`, `pulse.app_backgrounded` | native app wrappers, only when the portal lists them in `enabledSignals` | `automaticSignals: false` |
-| `pulse.deep_link` | native app wrappers, one call: `Pulse.deepLink(url)` | `automaticSignals: false` |
-| `pulse.permission_changed` | native app wrappers | `automaticSignals: false` |
-| `pulse.error` | browser, native app wrappers, Node.js | `captureErrors: false` |
-| `pulse.heatmap` | browser, native app wrappers, only when the portal switches `heatmaps` on | `captureHeatmaps: false` (and `automaticSignals: false`) |
+| Signal | Where | Plan | Switch off |
+| --- | --- | --- | --- |
+| `pulse.session_started`, `pulse.new_install`, `pulse.app_updated` | Node.js, native app wrappers, on by default | Free | `automaticSignals: false` |
+| `pulse.app_backgrounded` | browser, native app wrappers, on by default | Free | `automaticSignals: false` |
+| `pulse.app_opened` | native app wrappers, only when the portal lists it in `enabledSignals` | Free | `automaticSignals: false` |
+| `pulse.screen_view` | browser, native app wrappers (Node: `Pulse.screen`) | Counted | `automaticScreenViews: false` |
+| `pulse.deep_link` | native app wrappers, one call: `Pulse.deepLink(url)` | Counted | `automaticSignals: false` |
+| `pulse.permission_changed` | native app wrappers | Counted | `automaticSignals: false` |
+| `pulse.error` | browser, native app wrappers, Node.js | Counted | `captureErrors: false` |
+| `pulse.heatmap` | browser, native app wrappers, only when the portal switches `heatmaps` on | Counted | `captureHeatmaps: false` (and `automaticSignals: false`) |
 
-The portal can pause any type (`pausedSignals`) or switch it off (`disabledSignals`); `app_opened` and `app_backgrounded` stay off until the portal switches them on. A type that is switched off is not sent, whatever the code says, and options in code can only switch things off.
+The five lifecycle types marked Free do not count toward your plan. The server allows up to 50 free lifecycle signals per app, user and UTC day; above that they count like other signals.
+
+The portal can pause any type (`pausedSignals`) or switch it off (`disabledSignals`); `pulse.app_opened` stays off until the portal switches it on. A type that is switched off is not sent, whatever the code says, and options in code can only switch things off.
+
+On page or app hide, `pulse.app_backgrounded` reports `foregroundSeconds` and the system field `sessionSeconds`. The SDK saves the session end even if the signal is switched off or cannot be delivered, so the next launch in a native app wrapper reports the real `previousSessionSeconds`. Browser sends use `fetch` with `keepalive`; an unconfirmed signal stays in the persisted queue with its original timestamp. `visibilitychange` and `pagehide` for the same hide produce one signal; returning to the page allows the next one. Node.js has no background hook.
 
 Extra data on signals, all on by default and part of the same switches:
 
@@ -122,7 +134,7 @@ Extra data on signals, all on by default and part of the same switches:
 - Native app wrappers only: `launchMs` on the `pulse.session_started` of a cold start (the time from the start of the page to the first signal); `foregroundsToday` and `previousForegroundSeconds` (group `usage`); `notificationPermission` (`granted`, `denied` or `notDetermined`, group `permissions`), read as a status. The SDK never asks for a permission. `pulse.permission_changed` (props `permission`, `from`, `to`) is sent once on the first signal after the status changed.
 - Node.js: `launchMs` from the process uptime at the first signal. No foreground or background data.
 - `pulse.deep_link` has the props `scheme`, `host` and `path` (numeric and uuid-like segments as `:id`, at most 128 characters) and the three campaign tags of the link. The query, the fragment and other parameters are never read.
-- A normal browser sends none of the native app wrapper data: no app events, no `launchMs`, no foreground counters, no permissions and no deep links.
+- A normal browser sends `pulse.app_backgrounded` on hide, with foreground and session seconds, but no `pulse.app_opened`, `launchMs`, foreground counters, permissions or deep links.
 
 Limits that protect your plan: at most 20 `pulse.app_opened`, 20 `pulse.app_backgrounded`, 10 `pulse.deep_link`, 5 `pulse.permission_changed` and 100 `pulse.screen_view` per session, and at most 300 automatic signals per install and local day (kept next to the usage statistics, so Node.js and native app wrappers; a normal browser has no install and only the per-session limits apply). Manual signals and `pulse.error` are never limited this way. Signals dropped by a limit are counted and the count is sent once as the system key `droppedAutomatic` on the next signal. A `pulse.app_backgrounded` that arrives 30 minutes or more after the last signal is dropped instead of starting a session of its own.
 
@@ -232,7 +244,7 @@ Pulse.init(key, { debug: location.hostname === 'localhost' }); // or, in Vite: {
 
 ## Delivery and offline behaviour
 
-- Signals are batched. The first batch is sent as soon as possible; later batches follow the interval or the batch size, whichever comes first.
+- Signals are batched. In Node the first batch is sent right after `init`. In a browser the first batch leaves with the first interval (`flushIntervalSeconds`, 20 by default) or when the page is hidden, whichever comes first; call `Pulse.flush()` to send at once. Later batches follow the interval or the batch size, whichever comes first.
 - The queue is persisted (localStorage in browsers, files in Node) and survives reloads and restarts. Oldest signals are dropped first when the queue is full or expired.
 - Failed requests (network errors, 408, 425, 429, 5xx) are retried with exponential backoff from 1 second to 5 minutes, honouring `Retry-After` up to one hour. A 401 keeps the queue and stops sending until reload.
 - When the server asks for a pause or a different interval, the SDK follows it.

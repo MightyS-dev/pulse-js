@@ -245,7 +245,7 @@ export function createPulse(platform: Platform): PulseClient {
       const now = at ?? clock.now();
       // Idle is measured from the previous captured signal; a clock that moved back by that much also ends the session.
       const begins = idle(now);
-      if (begins) { session = env.sessionId(); counts.clear(); }
+      if (begins) { session = env.sessionId(); sessionStart = now; counts.clear(); }
       lastActivity = at === undefined ? now : Math.max(lastActivity, now);
       // Session statistics wait for the stored record; sessions begun before it is read start in order afterwards.
       let first: Draft[] = [];
@@ -258,6 +258,7 @@ export function createPulse(platform: Platform): PulseClient {
       }
       add(...first, ...changed, {
         ...fields, ...(error ? { error } : {}), ...(heatmap ? { heatmap } : {}), timestamp: new Date(now).toISOString(), sessionId: session,
+        ...(type === 'pulse.app_backgrounded' ? { sys: { sessionSeconds: String(Math.max(0, Math.round((now - sessionStart) / 1000))) } } : {}),
         ...(userHash === undefined ? {} : { userHash }),
       });
     });
@@ -368,14 +369,22 @@ export function createPulse(platform: Platform): PulseClient {
     if (shown === visible) return;
     if (shown) { since = now; control.foreground(); } else seen += now - since;
     visible = shown;
-    if (!app()) return;
-    if (shown) return opened(now, false);
+    if (shown) { foreground = now; if (app()) opened(now, false); return; }
     const seconds = Math.round((now - (foreground ?? now)) / 1000);
-    if (foreground === undefined) return;
     foreground = undefined;
-    if (usage) { usage = { ...usage, fgp: seconds }; saveUsage(); }
+    if (disabled || blocked) return;
+    const id = session;
+    const checkpoint = (): void => {
+      if (disabled || session !== id || !usage?.cur) return;
+      usage = { ...usage, cur: [usage.cur[0], Math.max(usage.cur[1], now)], ...(app() ? { fgp: seconds } : {}) };
+      saveUsage();
+    };
+    // Keep the end even when the signal is disabled, capped, or cannot be delivered.
+    if (hydrated) checkpoint(); else void ready.then(checkpoint);
     // A background event never opens a session of its own.
     if (!idle(now)) track('pulse.app_backgrounded', { props: { foregroundSeconds: seconds } });
+    closeHeat();
+    void flush(true);
   }
 
   /** Writes the statistics file one write after another. A failure keeps the in-memory statistics. */
@@ -445,6 +454,7 @@ export function createPulse(platform: Platform): PulseClient {
     if (!hydrated || disabled || stopped || !transport) return;
     prune();
     await save();
+    await usageOps;
     while (queue.length && !disabled && !stopped) {
       if (clock.now() < Math.max(retryAt, policy.pauseUntil)) break;
       // A lifecycle send may run beside a normal send; each batch is in flight at most once.
@@ -665,9 +675,10 @@ export function createPulse(platform: Platform): PulseClient {
         if (shown === undefined) return;
         visible = shown;
         since = clock.now();
+        if (shown) foreground = since;
         if (shown && app()) opened(since, true);
       });
-      protect(() => platform.onHidden(() => { closeHeat(); void flush(true); }));
+      protect(() => platform.onHidden(() => { if (platform.lifecycle) visibility(clock.now(), false); closeHeat(); void flush(true); }));
       protect(() => platform.heatmap?.(heatOn, tapped));
       protect(() => platform.overlay?.(options.host));
       if (!store.config) installHook();

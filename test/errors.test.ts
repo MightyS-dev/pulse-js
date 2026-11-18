@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { build } from 'esbuild';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -337,7 +338,7 @@ describe('Node process behaviour', () => {
   async function child(name: string, body: string, withPulse = true) {
     const queue = join(dir, `${name}.queue`);
     const script = join(dir, `${name}.mjs`);
-    await writeFile(script, `${withPulse ? `import { Pulse } from ${JSON.stringify(bundle)};\n` : ''}
+    await writeFile(script, `${withPulse ? `import { Pulse } from ${JSON.stringify(pathToFileURL(bundle).href)};\n` : ''}
 ${withPulse ? `Pulse.init('synthetic-app-key', { host: 'http://host.invalid', storagePath: ${JSON.stringify(queue)}, automaticSignals: false });\nawait new Promise(r => setTimeout(r, 300));\n` : ''}${body}`);
     const result = await run(process.execPath, [script], { cwd: dir, env: { ...process.env, HOME: dir } }).then(
       r => ({ code: 0, stdout: r.stdout, stderr: r.stderr }),
@@ -359,14 +360,14 @@ ${withPulse ? `Pulse.init('synthetic-app-key', { host: 'http://host.invalid', st
   it('a throw right after init is stored as a crash, and the next process sends it', async () => {
     const queue = join(dir, 'early.queue');
     const first = join(dir, 'early1.mjs');
-    await writeFile(first, `import { Pulse } from ${JSON.stringify(bundle)};\nPulse.init('synthetic-app-key', { host: 'http://host.invalid', storagePath: ${JSON.stringify(queue)}, automaticSignals: false });\nqueueMicrotask(() => { throw new Error('right at the start'); });`);
+    await writeFile(first, `import { Pulse } from ${JSON.stringify(pathToFileURL(bundle).href)};\nPulse.init('synthetic-app-key', { host: 'http://host.invalid', storagePath: ${JSON.stringify(queue)}, automaticSignals: false });\nqueueMicrotask(() => { throw new Error('right at the start'); });`);
     const crashed = await run(process.execPath, [first], { cwd: dir, env: { ...process.env, HOME: dir } }).then(() => 0, (e: { code: number }) => e.code);
     expect(crashed).toBe(1);
     const stored = JSON.parse(await readFile(queue, 'utf8')) as { early?: boolean; queue: Signal[] };
     expect(stored.early).toBe(true);
     expect(stored.queue.filter(s => s.type === 'pulse.error')[0]!.error).toMatchObject({ kind: 'crash', type: 'Error', message: 'right at the start' });
     const second = join(dir, 'early2.mjs');
-    await writeFile(second, `import { Pulse } from ${JSON.stringify(bundle)};\nimport { gunzipSync } from 'node:zlib';\nconst seen = [];\nglobalThis.fetch = async (url, init) => { if (init?.method === 'POST') { const raw = Buffer.from(init.body); seen.push(...JSON.parse((init.headers['Content-Encoding'] ? gunzipSync(raw) : raw).toString())); } return new Response('', { status: 202 }); };\nPulse.init('synthetic-app-key', { host: 'http://host.invalid', storagePath: ${JSON.stringify(queue)}, automaticSignals: false });\nawait new Promise(r => setTimeout(r, 300));\nawait Pulse.flush();\nconsole.log(JSON.stringify(seen.filter(s => s.type === 'pulse.error').map(s => s.error.kind)));`);
+    await writeFile(second, `import { Pulse } from ${JSON.stringify(pathToFileURL(bundle).href)};\nimport { gunzipSync } from 'node:zlib';\nconst seen = [];\nglobalThis.fetch = async (url, init) => { if (init?.method === 'POST') { const raw = Buffer.from(init.body); seen.push(...JSON.parse((init.headers['Content-Encoding'] ? gunzipSync(raw) : raw).toString())); } return new Response('', { status: 202 }); };\nPulse.init('synthetic-app-key', { host: 'http://host.invalid', storagePath: ${JSON.stringify(queue)}, automaticSignals: false });\nawait new Promise(r => setTimeout(r, 300));\nawait Pulse.flush();\nconsole.log(JSON.stringify(seen.filter(s => s.type === 'pulse.error').map(s => s.error.kind)));`);
     const next = await run(process.execPath, [second], { cwd: dir, env: { ...process.env, HOME: dir } });
     expect(next.stdout.trim()).toBe('["crash"]');
   }, 30000);
@@ -402,7 +403,7 @@ ${withPulse ? `Pulse.init('synthetic-app-key', { host: 'http://host.invalid', st
   it('captureErrors false adds no process listener', async () => {
     const queue = join(dir, 'off.queue');
     const script = join(dir, 'off.mjs');
-    await writeFile(script, `import { Pulse } from ${JSON.stringify(bundle)};\nPulse.init('k', { host: 'http://host.invalid', storagePath: ${JSON.stringify(queue)}, captureErrors: false });\nconsole.log(process.listenerCount('uncaughtExceptionMonitor'));`);
+    await writeFile(script, `import { Pulse } from ${JSON.stringify(pathToFileURL(bundle).href)};\nPulse.init('k', { host: 'http://host.invalid', storagePath: ${JSON.stringify(queue)}, captureErrors: false });\nconsole.log(process.listenerCount('uncaughtExceptionMonitor'));`);
     const { stdout } = await run(process.execPath, [script], { cwd: dir, env: { ...process.env, HOME: dir } });
     expect(stdout.trim()).toBe('0');
   }, 30000);

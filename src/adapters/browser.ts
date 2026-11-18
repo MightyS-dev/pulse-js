@@ -230,6 +230,8 @@ export function browserPlatform(): Platform {
     lifecycle(callback) {
       if (typeof document === 'undefined') return true;
       document.addEventListener('visibilitychange', () => callback(document.visibilityState !== 'hidden'));
+      globalThis.addEventListener?.('pagehide', () => callback(false));
+      globalThis.addEventListener?.('pageshow', () => callback(document.visibilityState !== 'hidden'));
       return document.visibilityState !== 'hidden';
     },
     wrapped: () => inWrapper(),
